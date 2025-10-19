@@ -1,0 +1,11 @@
+numpy
+scipy
+librosa
+tensorflow
+keras
+pandas
+matplotlib
+scikit-learn
+jupyter
+notebook
+soundfile

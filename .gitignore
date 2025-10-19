@@ -1,3 +1,39 @@
+# Ignore large data and model artifacts
+data/
+results/
+models/*.h5
+models/checkpoints/
+*.zip
+*.mp3
+*.wav
+*.flac
+*.ogg
+
+# Python cache and temp
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.tmp
+*.log
+
+# Jupyter and environment files
+.ipynb_checkpoints/
+.env
+.venv/
+*.egg-info/
+
+# OS / IDE junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Virtual environments and pip caches
+venv/
+pip-wheel-metadata/
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
