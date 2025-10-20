@@ -10,3 +10,4 @@ jupyter
 notebook
 soundfile
 tqdm
+yt-dlp
