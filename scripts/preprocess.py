@@ -3,6 +3,8 @@ import numpy as np
 import librosa
 import librosa.display
 from tqdm import tqdm
+import pandas as pd
+
 
 # Audio to mel
 
@@ -17,23 +19,30 @@ def extract_mel_spectrogram(file_path, n_mels=128, duration=15, sr=22050):
         return None
 
 def load_dataset(manifest_csv, target_shape=(128, 128)):
-    import pandas as pd
     df = pd.read_csv(manifest_csv)
     X, y = [], []
 
+    
     for _, row in tqdm(df.iterrows(), total=len(df)):
-        mel = extract_mel_spectrogram(row['filepath'])
+        mel = extract_mel_spectrogram(row["filepath"])
         if mel is None:
             continue
-        # resize/crop
-        if mel.shape[1] > target_shape[1]:
-            mel = mel[:, :target_shape[1]]
-        elif mel.shape[1] < target_shape[1]:
+
+        # --- Pad or crop to match training ---
+        if mel.shape[1] < target_shape[1]:
             pad_width = target_shape[1] - mel.shape[1]
-            mel = np.pad(mel, ((0, 0), (0, pad_width)), mode='constant')
+            mel = np.pad(mel, ((0, 0), (0, pad_width)), mode="constant")
+        else:
+            mel = mel[:, :target_shape[1]]
+
+        # --- Apply same per-sample normalization ---
+        mel = (mel - mel.min()) / (mel.max() - mel.min())
 
         X.append(mel)
-        y.append(row['label'])
-    X = np.array(X)[..., np.newaxis]
+        y.append(row["label"])
+
+    X = np.array(X)[..., np.newaxis]  # add channel dim
     y = np.array(y)
+    print(f"Loaded dataset: {X.shape}, labels: {y.shape}")
     return X, y
+
