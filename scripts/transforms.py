@@ -140,19 +140,28 @@ def embed_with_silence(y, sr, pre_silence=2.0, post_silence=2.0):
 # Transform pipeline (for batch testing)
 # -----------------------------
 
-def apply_random_transforms(y, sr):
-    """Apply a random subset of transforms for stress testing."""
-    transforms = [
-        lambda y, sr: resample(y, sr, random.choice([8000,16000,44100]))[0],
-        lambda y, sr: time_stretch(y, random.uniform(0.8, 1.2)),
-        lambda y, sr: pitch_shift(y, sr, random.uniform(-2, 2)),
-        lambda y, sr: add_noise(y, snr_db=random.choice([5,10,20])),
-        lambda y, sr: reverb(y, decay=random.uniform(0.3, 0.7)),
-        lambda y, sr: bandpass(y, sr, 300, 3400),
-        lambda y, sr: crop(y, sr, offset_sec=random.uniform(0, 10), duration_sec=10),
-        lambda y, sr: normalize(y)
-    ]
-    random.shuffle(transforms)
-    for t in transforms[: random.randint(2, 4)]:
-        y = t(y, sr)
+def apply_transform(y, sr, transform="random"):
+    """Apply the give transform for stress testing."""
+    transforms = {
+        "resample": lambda: librosa.resample(y, orig_sr=sr, target_sr=random.choice([8000, 16000, 44100])),
+        "time_stretch": lambda: librosa.effects.time_stretch(y, random.uniform(0.8, 1.2)),
+        "pitch_shift": lambda: librosa.effects.pitch_shift(y, sr=sr, n_steps=random.uniform(-2, 2)),
+        "add_noise": lambda: add_noise(y, snr_db=random.choice([5, 10, 20])),
+        "reverb": lambda: reverb(y, decay=random.uniform(0.3, 0.7)),
+        "bandpass": lambda: bandpass(y, sr, 300, 3400),
+        "crop": lambda: crop(y, sr, offset_sec=random.uniform(0, 10), duration_sec=10),
+        "normalize": lambda: normalize(y)
+    }
+    
+    if transform == "random":
+        selected = random.sample(list(transforms.items()), random.randint(2, 4))
+        for name, transform_fn in selected:
+            y = transform_fn()
+            print(f"Applying transform: {name}")
+    elif transform in transforms:
+        transform_fn = transforms[transform]
+        y = transform_fn()
+        print(f"Applying transform: {transform}")
+    else:
+        print(f"Unknown transform: {transform}")
     return y
