@@ -141,26 +141,77 @@ def embed_with_silence(y, sr, pre_silence=2.0, post_silence=2.0):
 # -----------------------------
 
 def apply_transform(y, sr, transform="random"):
-    """Apply the give transform for stress testing."""
+    """Apply the given transform for stress testing.
+
+    Each transform callable takes (y, sr) and returns a transformed y.
+    This avoids signature/closure issues and makes behavior explicit.
+    """
+    def _resample(y, sr):
+        return librosa.resample(y, orig_sr=sr, target_sr=random.choice([8000, 16000, 44100]))
+
+    def _downmix(y, sr):
+        return downmix_to_mono(y)
+
+    def _upmix(y, sr):
+        return upmix_to_stereo(y)
+
+    def _reencode(y, sr):
+        return reencode(y, sr, codec=random.choice(["mp3", "ogg"]), bitrate=random.choice(["64k", "96k", "128k"]))[0]
+
+    def _equalize(y, sr):
+        return equalize(y, gain_db=random.uniform(-6, 6), freq=random.uniform(500, 5000), sr=sr)
+
+    def _time_stretch(y, sr):
+        # librosa.effects.time_stretch expects 1D mono input
+        y_mono = downmix_to_mono(y)
+        return librosa.effects.time_stretch(y_mono, random.uniform(0.8, 1.2))
+
+    def _pitch_shift(y, sr):
+        y_mono = downmix_to_mono(y)
+        return librosa.effects.pitch_shift(y_mono, sr=sr, n_steps=random.uniform(-2, 2))
+
+    def _add_noise(y, sr):
+        return add_noise(y, snr_db=random.choice([5, 10, 20]))
+
+    def _reverb(y, sr):
+        return reverb(y, decay=random.uniform(0.3, 0.7))
+
+    def _bandpass(y, sr):
+        return bandpass(y, sr, 300, 3400)
+
+    def _crop(y, sr):
+        return crop(y, sr, offset_sec=random.uniform(0, 10), duration_sec=10)
+
+    def _normalize(y, sr):
+        return normalize(y)
+
+    def _embed_with_silence(y, sr):
+        return embed_with_silence(y, sr, pre_silence=1.0, post_silence=1.0)
+
     transforms = {
-        "resample": lambda: librosa.resample(y, orig_sr=sr, target_sr=random.choice([8000, 16000, 44100])),
-        "time_stretch": lambda: librosa.effects.time_stretch(y, random.uniform(0.8, 1.2)),
-        "pitch_shift": lambda: librosa.effects.pitch_shift(y, sr=sr, n_steps=random.uniform(-2, 2)),
-        "add_noise": lambda: add_noise(y, snr_db=random.choice([5, 10, 20])),
-        "reverb": lambda: reverb(y, decay=random.uniform(0.3, 0.7)),
-        "bandpass": lambda: bandpass(y, sr, 300, 3400),
-        "crop": lambda: crop(y, sr, offset_sec=random.uniform(0, 10), duration_sec=10),
-        "normalize": lambda: normalize(y)
+        "resample": _resample,
+        "downmix": _downmix,
+        "upmix": _upmix,
+        "reencode": _reencode,
+        "equalize": _equalize,
+        "time_stretch": _time_stretch,
+        "pitch_shift": _pitch_shift,
+        "add_noise": _add_noise,
+        "reverb": _reverb,
+        "bandpass": _bandpass,
+        "crop": _crop,
+        "normalize": _normalize,
+        "embed_with_silence": _embed_with_silence,
     }
-    
+
     if transform == "random":
         selected = random.sample(list(transforms.items()), random.randint(2, 4))
         for name, transform_fn in selected:
-            y = transform_fn()
+            y = transform_fn(y, sr)
             print(f"Applying transform: {name}")
     elif transform in transforms:
         transform_fn = transforms[transform]
-        y = transform_fn()
+        y = transform_fn(y, sr)
         print(f"Applying transform: {transform}")
     else:
         print(f"Unknown transform: {transform}")
