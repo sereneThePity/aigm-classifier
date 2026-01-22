@@ -76,7 +76,7 @@ def load_dataset_with_transforms(manifest_csv, target_shape=(128, 128), n_mels=1
             
             # Apply random transforms
             audio_transformed = apply_transform(audio, sr, transform=transform)
-            
+            print(f"Transformed audio shape: {audio_transformed.shape}")
             # Extract mel spectrogram
             mel_spec = librosa.feature.melspectrogram(y=audio_transformed, sr=sr, n_mels=n_mels)
             mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
