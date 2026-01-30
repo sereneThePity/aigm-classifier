@@ -38,20 +38,31 @@ def build_manifest(root_dir, output_csv, max_per_folder=50, sample_type="both"):
     header = ["filepath","label","source","generator","format","sample_rate","duration","notes"]
     rows = []
 
+    print(f"📂 Scanning {root_dir} and sampling up to {max_per_folder} samples per case...")
+
+    # Determine which cases to process
+    cases = []
     if sample_type == "real":
-        print("📂 Scanning for REAL samples only...")
+        cases = ["real"]
     elif sample_type == "fake":
-        print("📂 Scanning for FAKE samples only...")
+        cases = ["fake"]
+    else:  # "both"
+        cases = ["real", "fake"]
 
-    print(f"📂 Scanning {root_dir} and sampling up to {max_per_folder} per top-level source...")
+    for case in cases:
+        print(f"📂 Scanning for {case.upper()} samples...")
+        folder_files = scan_audio_files(root_dir, sample_type=case)
 
-    folder_files = scan_audio_files(root_dir, sample_type=sample_type)
+        # Collect all files from all sources for this case
+        all_files = []
+        for source_dir, files in folder_files.items():
+            all_files.extend(files)
 
-    for source_dir, files in folder_files.items():
-        sampled = random.sample(files, min(len(files), max_per_folder))
-        print(f"• {os.path.basename(source_dir)} → {len(sampled)} selected (of {len(files)})")
+        # Sample up to max_per_folder files from all sources combined for this case
+        sampled_files = random.sample(all_files, min(len(all_files), max_per_folder))
+        print(f"• Selected {len(sampled_files)} {case} samples (of {len(all_files)})")
 
-        for path in tqdm(sampled, desc=f"Processing {os.path.basename(source_dir)}", leave=False):
+        for path in tqdm(sampled_files, desc=f"Processing {case} samples", leave=False):
             parts = path.replace("\\","/").split("/")
             if len(parts) < 4:
                 continue
@@ -65,6 +76,7 @@ def build_manifest(root_dir, output_csv, max_per_folder=50, sample_type="both"):
             rows.append([path, label, source, generator, fmt, sr, dur, ""])
 
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
+    random.shuffle(rows)
     with open(output_csv, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)

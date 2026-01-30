@@ -81,7 +81,15 @@ def load_dataset_with_transforms(manifest_csv, target_shape=(128, 128), n_mels=1
             mel_spec = librosa.feature.melspectrogram(y=audio_transformed, sr=sr, n_mels=n_mels)
             mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
             
-            # Pad or crop to target shape
+            # Pad or crop to target shape (both frequency and time dimensions)
+            # Frequency dimension
+            if mel_spec_db.shape[0] < target_shape[0]:
+                pad_width = target_shape[0] - mel_spec_db.shape[0]
+                mel_spec_db = np.pad(mel_spec_db, ((0, pad_width), (0, 0)), mode="constant")
+            else:
+                mel_spec_db = mel_spec_db[:target_shape[0], :]
+            
+            # Time dimension
             if mel_spec_db.shape[1] < target_shape[1]:
                 pad_width = target_shape[1] - mel_spec_db.shape[1]
                 mel_spec_db = np.pad(mel_spec_db, ((0, 0), (0, pad_width)), mode="constant")
