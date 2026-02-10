@@ -83,7 +83,7 @@ def build_manifest(root_dir, output_csv, max_per_folder=50, sample_type="both"):
         writer.writerows(rows)
 
     print(f"✅ Manifest written to {output_csv} ({len(rows)} total entries)")
-
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default="data/testset", help="Root folder to scan")
