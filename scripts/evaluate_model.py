@@ -73,8 +73,10 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
 
     # Save to disk for later use
     np.save(save_path, features)
-    np.save("data/processed/y_test", y)
-    print(f"✅ Saved labels to y_test.npy")
+    np.save("data/processed/y_labels", y)
+    np.save("data/processed/X_spectograms", X)
+    print(f"✅ Saved labels to y_labels.npy")
+    print(f"✅ Saved spectrograms to X_spectograms.npy")
     print(f"💾 Features saved to {save_path}")
 
 
