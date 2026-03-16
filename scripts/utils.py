@@ -3,6 +3,9 @@ import os
 import json
 from typing import List
 
+# Global path configuration
+ROOT_DIR = "/home/student/s/ssahu"
+DATA_DIR = "/share/users/student/s/ssahu" 
 
 def save_json(obj, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)

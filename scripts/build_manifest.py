@@ -4,6 +4,7 @@ import soundfile as sf
 import argparse
 import random
 from tqdm import tqdm
+from utils import ROOT_DIR, DATA_DIR
 
 def scan_audio_files(root_dir, exts=(".wav", ".mp3", ".flac", ".ogg", ".m4a"), sample_type="both"):
     """Return dictionary mapping top-level source dirs to list of files."""
@@ -86,8 +87,8 @@ def build_manifest(root_dir, output_csv, max_per_folder=50, sample_type="both"):
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", default="data/testset", help="Root folder to scan")
-    parser.add_argument("--out", default="data/testset/manifest.csv", help="Output CSV path")
+    parser.add_argument("--root", default=os.path.join(DATA_DIR, "data/testset"), help="Root folder to scan")
+    parser.add_argument("--out", default=os.path.join(DATA_DIR, "data/testset/manifest.csv"), help="Output CSV path")
     parser.add_argument("--max", type=int, default=50, help="Maximum files per top-level source")
     parser.add_argument("--type", choices=["real", "fake", "both"], default="both", help="Type of samples to include")
     args = parser.parse_args()

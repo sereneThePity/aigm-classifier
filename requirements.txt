@@ -1,8 +1,7 @@
 numpy
 scipy
 librosa
-tensorflow
-keras
+torch
 pandas
 matplotlib
 scikit-learn

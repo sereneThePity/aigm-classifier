@@ -17,6 +17,7 @@ import shutil
 import argparse
 from pathlib import Path
 from typing import List, Dict
+from utils import ROOT_DIR, DATA_DIR
 
 
 def retrieve_audio_files(
@@ -89,7 +90,7 @@ def main():
     parser.add_argument(
         '--manifest',
         type=str,
-        default='data/testset/manifest.csv',
+        default=os.path.join(DATA_DIR, 'data/testset/manifest.csv'),
         help='Path to manifest CSV file'
     )
     parser.add_argument(

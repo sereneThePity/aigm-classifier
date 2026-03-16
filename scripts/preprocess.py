@@ -6,6 +6,7 @@ from tqdm import tqdm
 import pandas as pd
 import argparse
 from transforms import apply_transform
+from utils import ROOT_DIR, DATA_DIR
 
 
 # Audio to mel
