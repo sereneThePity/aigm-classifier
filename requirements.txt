@@ -10,3 +10,4 @@ notebook
 soundfile
 tqdm
 yt-dlp
+pydub

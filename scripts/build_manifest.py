@@ -14,17 +14,19 @@ def scan_audio_files(root_dir, exts=(".wav", ".mp3", ".flac", ".ogg", ".m4a"), s
         if not valid:
             continue
 
-        parts = dirpath.replace("\\", "/").split("/")
-        if len(parts) < 4:
+        # Get relative path from root to correctly identify real/fake
+        rel_path = os.path.relpath(dirpath, root_dir)
+        parts = rel_path.replace("\\", "/").split("/")
+        if len(parts) < 2:
             continue
 
         # skip files not matching sample_type
-        if sample_type == "real" and parts[2] != "real":
+        if sample_type == "real" and parts[0] != "real":
             continue
-        if sample_type == "fake" and parts[2] != "fake":
+        if sample_type == "fake" and parts[0] != "fake":
             continue
 
-        source_key = "/".join(parts[:4])
+        source_key = "/".join(parts[:2])
         folder_files.setdefault(source_key, []).extend(valid)
     return folder_files
 
@@ -64,11 +66,13 @@ def build_manifest(root_dir, output_csv, max_per_folder=50, sample_type="both"):
         print(f"• Selected {len(sampled_files)} {case} samples (of {len(all_files)})")
 
         for path in tqdm(sampled_files, desc=f"Processing {case} samples", leave=False):
-            parts = path.replace("\\","/").split("/")
-            if len(parts) < 4:
+            # Get relative path from root_dir to extract label and source correctly
+            rel_path = os.path.relpath(path, root_dir)
+            parts = rel_path.replace("\\","/").split("/")
+            if len(parts) < 3:
                 continue
-            label_str = parts[2]
-            source_str = parts[-2]
+            label_str = parts[0]  # "real" or "fake"
+            source_str = parts[1]  # source folder (fma_real, audioldm2, etc.)
             label = 0 if label_str == "real" else 1
             generator = source_str if label else ""
             source = source_str if not label else ""
@@ -87,8 +91,8 @@ def build_manifest(root_dir, output_csv, max_per_folder=50, sample_type="both"):
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", default=os.path.join(DATA_DIR, "data/testset"), help="Root folder to scan")
-    parser.add_argument("--out", default=os.path.join(DATA_DIR, "data/testset/manifest.csv"), help="Output CSV path")
+    parser.add_argument("--root", default=os.path.join(DATA_DIR, "testset"), help="Root folder to scan")
+    parser.add_argument("--out", default=os.path.join(DATA_DIR, "testset/manifest.csv"), help="Output CSV path")
     parser.add_argument("--max", type=int, default=50, help="Maximum files per top-level source")
     parser.add_argument("--type", choices=["real", "fake", "both"], default="both", help="Type of samples to include")
     args = parser.parse_args()
