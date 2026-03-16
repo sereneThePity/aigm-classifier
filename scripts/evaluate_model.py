@@ -74,7 +74,7 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         print(f"Flattened feature shape: {features.shape}")
 
     # Save to disk for later use
-    processed_dir = os.path.join(DATA_DIR, "data/processed")
+    processed_dir = os.path.join(DATA_DIR, "/processed")
     os.makedirs(processed_dir, exist_ok=True)
     np.save(save_path, features)
     np.save(os.path.join(processed_dir, "y_labels"), y)
@@ -107,7 +107,7 @@ if __name__ == "__main__":
     extract_parser.add_argument('--model_path', required=True, help='Path to the model')
     extract_parser.add_argument('--manifest_path', required=True, help='Path to the manifest CSV')
     extract_parser.add_argument('--layer_name', help='Layer name to extract from')
-    extract_parser.add_argument('--save_path', default=os.path.join(DATA_DIR, 'data/processed/intermediate_activations.npy'), help='Path to save features')
+    extract_parser.add_argument('--save_path', default=os.path.join(DATA_DIR, 'processed/intermediate_activations.npy'), help='Path to save features')
 
     args = parser.parse_args()
 

@@ -1,0 +1,16 @@
+{
+  "model_path": "/share/users/student/s/ssahu/aigm-classifier/models/cnn_model.pt",
+  "epochs": 1,
+  "batch_size": 16,
+  "learning_rate": 0.001,
+  "test_accuracy": 50.0,
+  "test_loss": 0.6918795108795166,
+  "num_samples": 20,
+  "num_classes": 2,
+  "input_shape": [
+    128,
+    128
+  ],
+  "segment_duration": 5.0,
+  "n_mels": 128
+}

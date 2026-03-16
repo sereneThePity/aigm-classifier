@@ -90,7 +90,7 @@ def main():
     parser.add_argument(
         '--manifest',
         type=str,
-        default=os.path.join(DATA_DIR, 'data/testset/manifest.csv'),
+        default=os.path.join(DATA_DIR, '/testset/manifest.csv'),
         help='Path to manifest CSV file'
     )
     parser.add_argument(
