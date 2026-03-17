@@ -11,3 +11,4 @@ soundfile
 tqdm
 yt-dlp
 pydub
+ffmpeg

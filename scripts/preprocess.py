@@ -6,6 +6,7 @@ from tqdm import tqdm
 import pandas as pd
 import argparse
 from scipy.signal import butter, sosfilt
+from multiprocessing import Pool
 from transforms import apply_transform
 from utils import ROOT_DIR, DATA_DIR
 
@@ -173,18 +174,73 @@ def normalize_spectrogram(spec):
     
     return (spec - mean) / std
 
+# Module-level function for multiprocessing (must be at module level to be pickleable)
+def _process_audio_file(args_tuple):
+    """
+    Process a single audio file for preprocessing.
+    This function must be at module level to be pickleable for multiprocessing.
+    Args: tuple of (filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape)
+    """
+    filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape = args_tuple
+    
+    try:
+        # Step 1-7: Comprehensive audio preprocessing
+        audio = load_and_prep_audio(
+            filepath,
+            sr=22050,
+            segment_duration=segment_duration,
+            target_loudness=target_loudness,
+            hp_freq=hp_freq
+        )
+        
+        if audio is None:
+            return None, None
+        
+        # Step 8: Compute mel spectrogram
+        mel_spec = librosa.feature.melspectrogram(y=audio, sr=22050, n_mels=n_mels)
+        
+        # Step 9: Log scale
+        mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
+        
+        # Step 10: Normalize spectrogram (mean/std)
+        mel_spec_db = normalize_spectrogram(mel_spec_db)
+        
+        # Pad or crop to target shape
+        # Frequency dimension (should already be n_mels)
+        if mel_spec_db.shape[0] < target_shape[0]:
+            pad_width = target_shape[0] - mel_spec_db.shape[0]
+            mel_spec_db = np.pad(mel_spec_db, ((0, pad_width), (0, 0)), mode='constant')
+        else:
+            mel_spec_db = mel_spec_db[:target_shape[0], :]
+        
+        # Time dimension
+        if mel_spec_db.shape[1] < target_shape[1]:
+            pad_width = target_shape[1] - mel_spec_db.shape[1]
+            mel_spec_db = np.pad(mel_spec_db, ((0, 0), (0, pad_width)), mode='constant')
+        else:
+            mel_spec_db = mel_spec_db[:, :target_shape[1]]
+        
+        return mel_spec_db, label
+    
+    except Exception as e:
+        print(f"⚠️  Error processing {filepath}: {e}")
+        return None, None
+
+
 def load_dataset_comprehensive(
     manifest_csv, 
     n_mels=128, 
     target_shape=(128, 128),
     segment_duration=5.0,
     target_loudness=-20.0,
-    hp_freq=20
+    hp_freq=20,
+    num_workers=40
 ):
     """
     Load dataset with comprehensive preprocessing:
     - Full audio preprocessing pipeline
     - Mel spectrogram extraction with normalization
+    - Multiprocessing support for faster loading
     
     Args:
         manifest_csv: Path to CSV with 'filepath' and 'label' columns
@@ -193,6 +249,7 @@ def load_dataset_comprehensive(
         segment_duration: Fixed segment duration in seconds (default 5.0s)
         target_loudness: Target RMS level in dB (default -20 dB)
         hp_freq: High-pass filter frequency in Hz (default 20 Hz)
+        num_workers: Number of processes for multiprocessing (default 4)
     
     Returns:
         X: Array of shape (n_samples, freq, time, 1)
@@ -203,54 +260,24 @@ def load_dataset_comprehensive(
     
     print(f"📊 Loading dataset from {manifest_csv}")
     print(f"   Settings: segment={segment_duration}s, loudness={target_loudness}dB, hp_filter={hp_freq}Hz")
+    print(f"   Using {num_workers} workers for multiprocessing")
     
-    for idx, (_, row) in enumerate(tqdm(df.iterrows(), total=len(df), desc="Processing")):
-        filepath = row["filepath"]
-        label = row["label"]
-        
-        try:
-            # Step 1-7: Comprehensive audio preprocessing
-            audio = load_and_prep_audio(
-                filepath,
-                sr=22050,
-                segment_duration=segment_duration,
-                target_loudness=target_loudness,
-                hp_freq=hp_freq
-            )
-            
-            if audio is None:
-                continue
-            
-            # Step 8: Compute mel spectrogram
-            mel_spec = librosa.feature.melspectrogram(y=audio, sr=22050, n_mels=n_mels)
-            
-            # Step 9: Log scale
-            mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-            
-            # Step 10: Normalize spectrogram (mean/std)
-            mel_spec_db = normalize_spectrogram(mel_spec_db)
-            
-            # Pad or crop to target shape
-            # Frequency dimension (should already be n_mels)
-            if mel_spec_db.shape[0] < target_shape[0]:
-                pad_width = target_shape[0] - mel_spec_db.shape[0]
-                mel_spec_db = np.pad(mel_spec_db, ((0, pad_width), (0, 0)), mode='constant')
-            else:
-                mel_spec_db = mel_spec_db[:target_shape[0], :]
-            
-            # Time dimension
-            if mel_spec_db.shape[1] < target_shape[1]:
-                pad_width = target_shape[1] - mel_spec_db.shape[1]
-                mel_spec_db = np.pad(mel_spec_db, ((0, 0), (0, pad_width)), mode='constant')
-            else:
-                mel_spec_db = mel_spec_db[:, :target_shape[1]]
-            
+    # Create argument tuples for each file
+    args_list = [
+        (fp, lb, segment_duration, target_loudness, hp_freq, n_mels, target_shape) 
+        for fp, lb in zip(df["filepath"], df["label"])
+    ]
+    
+    # Process files in parallel
+    with Pool(num_workers) as pool:
+        results = list(tqdm(pool.imap(_process_audio_file, args_list), 
+                           total=len(df), desc="Processing"))
+    
+    # Collect results
+    for mel_spec_db, label in results:
+        if mel_spec_db is not None and label is not None:
             X.append(mel_spec_db)
             y.append(label)
-        
-        except Exception as e:
-            print(f"⚠️  Error processing {filepath}: {e}")
-            continue
     
     X = np.array(X)[..., np.newaxis]  # Add channel dimension
     y = np.array(y)

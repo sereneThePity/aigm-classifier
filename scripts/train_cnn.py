@@ -109,7 +109,10 @@ if __name__ == '__main__':
     
     # Build model
     print(f"\n🏗️ Building CNN model...")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"   Using device: {device}")
     model = build_simple_cnn(input_shape, num_classes)
+    model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
     print(f"   Model created with {sum(p.numel() for p in model.parameters())} parameters")
@@ -152,6 +155,7 @@ if __name__ == '__main__':
         train_total = 0
         
         for batch_X, batch_y in train_loader:
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             optimizer.zero_grad()
             outputs = model(batch_X)
             loss = criterion(outputs, batch_y)
@@ -174,6 +178,7 @@ if __name__ == '__main__':
         
         with torch.no_grad():
             for batch_X, batch_y in val_loader:
+                batch_X, batch_y = batch_X.to(device), batch_y.to(device)
                 outputs = model(batch_X)
                 loss = criterion(outputs, batch_y)
                 
@@ -211,6 +216,7 @@ if __name__ == '__main__':
     
     with torch.no_grad():
         for batch_X, batch_y in test_loader:
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             outputs = model(batch_X)
             loss = criterion(outputs, batch_y)
             
