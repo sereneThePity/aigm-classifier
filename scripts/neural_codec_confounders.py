@@ -243,8 +243,7 @@ class AudioLMCodecWrapper(BaseCodec):
         """Full encode-decode cycle."""
         tokens = self.encode(audio)
         decoded = self.decode(tokens)
-        # Normalize output
-        return decoded[:len(audio)] * (np.max(np.abs(audio)) / (np.max(np.abs(decoded)) + 1e-8))
+        return decoded[:len(audio)]
 
 
 class VALLECodecWrapper(BaseCodec):

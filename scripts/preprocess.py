@@ -5,10 +5,15 @@ import librosa.display
 from tqdm import tqdm
 import pandas as pd
 import argparse
-from scipy.signal import butter, sosfilt
 from multiprocessing import Pool
 from transforms import apply_transform
-from utils import ROOT_DIR, DATA_DIR
+from utils import (
+    ROOT_DIR, 
+    DATA_DIR,
+    normalize_audio,
+    apply_highpass_filter,
+    normalize_spectrogram
+)
 from neural_codec_confounders import NeuralCodecConfounder, get_available_codecs
 
 
@@ -58,7 +63,7 @@ def load_and_prep_audio(
             y = librosa.resample(y, orig_sr=loaded_sr, target_sr=sr)
         
         # 4. Loudness normalize (RMS-based, LUFS approximation)
-        y = normalize_loudness(y, target_db=target_loudness)
+        y = normalize_audio(y, method='db', target=target_loudness)
         
         # 5. Trim silence
         y, _ = librosa.effects.trim(y, top_db=40)
@@ -91,61 +96,6 @@ def load_and_prep_audio(
         return None
 
 
-def normalize_loudness(y, target_db=-20.0):
-    """
-    RMS-based loudness normalization (approximates LUFS).
-    
-    Args:
-        y: Audio array
-        target_db: Target RMS level in dB
-    
-    Returns:
-        Normalized audio array
-    """
-    # Calculate RMS
-    rms = np.sqrt(np.mean(y ** 2))
-    
-    # Avoid log of zero
-    if rms < 1e-7:
-        return y
-    
-    # Current RMS in dB
-    current_db = 20 * np.log10(rms)
-    
-    # Calculate gain needed
-    gain_db = target_db - current_db
-    gain_linear = 10 ** (gain_db / 20)
-    
-    return y * gain_linear
-
-
-def apply_highpass_filter(y, sr, cutoff_freq=20):
-    """
-    Apply high-pass filter to remove low-frequency rumble.
-    
-    Args:
-        y: Audio array
-        sr: Sample rate
-        cutoff_freq: Cutoff frequency in Hz
-    
-    Returns:
-        Filtered audio array
-    """
-    # Design Butterworth high-pass filter
-    nyquist = sr / 2
-    normalized_cutoff = cutoff_freq / nyquist
-    
-    # Ensure normalized cutoff is in valid range
-    if normalized_cutoff >= 1.0:
-        normalized_cutoff = 0.99
-    if normalized_cutoff <= 0:
-        normalized_cutoff = 0.01
-    
-    sos = butter(4, normalized_cutoff, btype='high', output='sos')
-    y_filtered = sosfilt(sos, y)
-    return y_filtered
-
-
 def extract_mel_spectrogram(file_path, n_mels=128, sr=44100):
     """Extract mel spectrogram from preprocessed audio."""
     try:
@@ -167,24 +117,6 @@ def extract_mel_spectrogram(file_path, n_mels=128, sr=44100):
         print(f"❌ Error extracting mel spectrogram from {file_path}: {e}")
         return None
 
-
-def normalize_spectrogram(spec):
-    """
-    Normalize spectrogram using mean/std normalization.
-    
-    Args:
-        spec: Mel spectrogram array
-    
-    Returns:
-        Normalized spectrogram
-    """
-    mean = np.mean(spec)
-    std = np.std(spec)
-    
-    if std < 1e-7:
-        return spec
-    
-    return (spec - mean) / std
 
 # Module-level function for multiprocessing (must be at module level to be pickleable)
 def _process_audio_file(args_tuple):

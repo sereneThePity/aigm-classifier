@@ -15,6 +15,7 @@ import json
 # Import your preprocessing utilities
 from preprocess import load_dataset_comprehensive, load_and_prep_audio
 from neural_codec_confounders import NeuralCodecConfounder, get_available_codecs
+from utils import normalize_audio
 
 
 def example_1_check_available_codecs():
@@ -79,22 +80,30 @@ def example_2_apply_codec_to_single_file():
         print(f"   Output shape: {processed.shape}")
         print(f"   Length change: {processed.shape[0] - audio.shape[0]:+d} samples")
         
+        # Normalize to consistent amplitude (linear RMS normalization)
+        normalized = normalize_audio(processed, method='linear', target=0.1)
+        
         # Calculate metrics
         original_rms = np.sqrt(np.mean(audio ** 2))
         processed_rms = np.sqrt(np.mean(processed ** 2))
+        normalized_rms = np.sqrt(np.mean(normalized ** 2))
         original_peak = np.max(np.abs(audio))
         processed_peak = np.max(np.abs(processed))
+        normalized_peak = np.max(np.abs(normalized))
         
         # Energy ratio instead of SNR (works even with different lengths)
         original_energy = np.sum(audio ** 2)
         processed_energy = np.sum(processed ** 2)
+        normalized_energy = np.sum(normalized ** 2)
         energy_ratio_db = 10 * np.log10((original_energy + 1e-10) / (processed_energy + 1e-10))
         
-        print(f"   Original RMS: {original_rms:.6f}")
-        print(f"   Processed RMS: {processed_rms:.6f}")
-        print(f"   Original Peak: {original_peak:.6f}")
-        print(f"   Processed Peak: {processed_peak:.6f}")
-        print(f"   Energy ratio: {energy_ratio_db:.2f} dB")
+        print(f"\n   Before normalization:")
+        print(f"   - RMS: {processed_rms:.6f}")
+        print(f"   - Peak: {processed_peak:.6f}")
+        print(f"\n   After normalize_audio():")
+        print(f"   - RMS: {normalized_rms:.6f}")
+        print(f"   - Peak: {normalized_peak:.6f}")
+        print(f"   - Energy ratio: {energy_ratio_db:.2f} dB")
     else:
         print(f"❌ Failed to apply {codec_name}")
 
@@ -134,10 +143,13 @@ def example_3_apply_all_codecs_comparison():
         processed = confounder.apply_codec(audio, codec_name)
         
         if processed is not None:
+            # Normalize audio to consistent RMS level (linear method)
+            normalized = normalize_audio(processed, method='linear', target=0.1)
+            
             # Calculate metrics
             peak_original = np.max(np.abs(audio))
-            peak_processed = np.max(np.abs(processed))
-            peak_change = (peak_processed - peak_original) / (peak_original + 1e-10) * 100
+            peak_normalized = np.max(np.abs(normalized))
+            peak_change = (peak_normalized - peak_original) / (peak_original + 1e-10) * 100
             
             results[codec_name] = {
                 "status": "✅ OK",
@@ -340,14 +352,13 @@ def main():
     print("█" * 70)
     print("█" + " " * 68 + "█")
     print("█  NEURAL CODEC CONFOUNDERS: Usage Examples".ljust(69) + "█")
-    print("█  AI-Generated Music Classifier".ljust(69) + "█")
     print("█" + " " * 68 + "█")
     print("█" * 70)
     
     # Run examples
     # example_1_check_available_codecs()
-    example_2_apply_codec_to_single_file()
-    # example_3_apply_all_codecs_comparison()
+    # example_2_apply_codec_to_single_file()
+    example_3_apply_all_codecs_comparison()
     # example_4_load_with_codec_confounder()
     # example_5_create_augmented_training_set()
     # example_6_evaluate_codec_robustness()

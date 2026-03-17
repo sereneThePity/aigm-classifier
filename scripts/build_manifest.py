@@ -4,6 +4,7 @@ import soundfile as sf
 import argparse
 import random
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils import ROOT_DIR, DATA_DIR
 
 def scan_audio_files(root_dir, exts=(".wav", ".mp3", ".flac", ".ogg", ".m4a"), sample_type="both"):
@@ -37,7 +38,7 @@ def analyze_audio(path):
     except Exception:
         return None, None
 
-def build_manifest(root_dir, output_csv, max_per_folder=50, sample_type="both"):
+def build_manifest(root_dir, output_csv, max_per_folder=50, sample_type="both", max_workers=8):
     header = ["filepath","label","source","generator","format","sample_rate","duration","notes"]
     rows = []
 
@@ -65,20 +66,29 @@ def build_manifest(root_dir, output_csv, max_per_folder=50, sample_type="both"):
         sampled_files = random.sample(all_files, min(len(all_files), max_per_folder))
         print(f"• Selected {len(sampled_files)} {case} samples (of {len(all_files)})")
 
-        for path in tqdm(sampled_files, desc=f"Processing {case} samples", leave=False):
-            # Get relative path from root_dir to extract label and source correctly
-            rel_path = os.path.relpath(path, root_dir)
-            parts = rel_path.replace("\\","/").split("/")
-            if len(parts) < 3:
-                continue
-            label_str = parts[0]  # "real" or "fake"
-            source_str = parts[1]  # source folder (fma_real, audioldm2, etc.)
-            label = 0 if label_str == "real" else 1
-            generator = source_str if label else ""
-            source = source_str if not label else ""
-            fmt = os.path.splitext(path)[1].replace(".", "").lower()
-            sr, dur = analyze_audio(path)
-            rows.append([path, label, source, generator, fmt, sr, dur, ""])
+        # Parallel metadata extraction
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(analyze_audio, path): path for path in sampled_files}
+            
+            for future in tqdm(as_completed(futures), total=len(sampled_files), desc=f"Processing {case} samples", leave=False):
+                path = futures[future]
+                try:
+                    sr, dur = future.result()
+                except Exception:
+                    sr, dur = None, None
+                
+                # Get relative path from root_dir to extract label and source correctly
+                rel_path = os.path.relpath(path, root_dir)
+                parts = rel_path.replace("\\","/").split("/")
+                if len(parts) < 3:
+                    continue
+                label_str = parts[0]  # "real" or "fake"
+                source_str = parts[1]  # source folder (fma_real, audioldm2, etc.)
+                label = 0 if label_str == "real" else 1
+                generator = source_str if label else ""
+                source = source_str if not label else ""
+                fmt = os.path.splitext(path)[1].replace(".", "").lower()
+                rows.append([path, label, source, generator, fmt, sr, dur, ""])
 
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
     random.shuffle(rows)
@@ -95,5 +105,6 @@ if __name__ == "__main__":
     parser.add_argument("--out", default=os.path.join(DATA_DIR, "testset/manifest.csv"), help="Output CSV path")
     parser.add_argument("--max", type=int, default=50, help="Maximum files per top-level source")
     parser.add_argument("--type", choices=["real", "fake", "both"], default="both", help="Type of samples to include")
+    parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers for metadata extraction")
     args = parser.parse_args()
-    build_manifest(args.root, args.out, args.max, args.type)
+    build_manifest(args.root, args.out, args.max, args.type, args.workers)
