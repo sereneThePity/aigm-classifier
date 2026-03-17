@@ -9,33 +9,39 @@ from scipy.signal import butter, sosfilt
 from multiprocessing import Pool
 from transforms import apply_transform
 from utils import ROOT_DIR, DATA_DIR
+from neural_codec_confounders import NeuralCodecConfounder, get_available_codecs
 
 
 # ===== Comprehensive Preprocessing Pipeline =====
 
 def load_and_prep_audio(
     file_path,
-    sr=22050,
+    sr=44100,
     segment_duration=5.0,
     target_loudness=-20.0,
-    hp_freq=20
+    hp_freq=20,
+    codec_name=None,
+    codec_confounder=None
 ):
     """
     Complete preprocessing pipeline:
     1. Load audio
     2. Convert to mono
-    3. Resample to target sr (22050 Hz)
+    3. Resample to target sr (44100 Hz)
     4. Loudness normalize (RMS-based target)
     5. Trim silence
     6. Random crop to fixed-length segment
     7. High-pass filter
+    8. (Optional) Apply neural codec confounder
     
     Args:
         file_path: Path to audio file
-        sr: Target sample rate (default 22050 Hz)
+        sr: Target sample rate (default 44100 Hz)
         segment_duration: Duration of fixed segment in seconds (default 5.0s)
         target_loudness: Target RMS loudness in dB (default -20 dB)
         hp_freq: High-pass filter frequency in Hz (default 20 Hz)
+        codec_name: Optional neural codec name to apply as confounder
+        codec_confounder: Optional NeuralCodecConfounder instance
     
     Returns:
         audio: Preprocessed audio array, or None if failed
@@ -71,6 +77,12 @@ def load_and_prep_audio(
         
         # 7. High-pass filter (20 Hz)
         y = apply_highpass_filter(y, sr, cutoff_freq=hp_freq)
+        
+        # 8. (Optional) Apply neural codec confounder
+        if codec_name is not None and codec_confounder is not None:
+            codec_audio = codec_confounder.apply_codec(y, codec_name)
+            if codec_audio is not None:
+                y = codec_audio
         
         return y
     
@@ -134,7 +146,7 @@ def apply_highpass_filter(y, sr, cutoff_freq=20):
     return y_filtered
 
 
-def extract_mel_spectrogram(file_path, n_mels=128, sr=22050):
+def extract_mel_spectrogram(file_path, n_mels=128, sr=44100):
     """Extract mel spectrogram from preprocessed audio."""
     try:
         y = load_and_prep_audio(file_path, sr=sr)
@@ -179,25 +191,32 @@ def _process_audio_file(args_tuple):
     """
     Process a single audio file for preprocessing.
     This function must be at module level to be pickleable for multiprocessing.
-    Args: tuple of (filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape)
+    Args: tuple of (filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name)
     """
-    filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape = args_tuple
+    filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name = args_tuple
     
     try:
+        # Create codec confounder in worker process if needed
+        codec_confounder = None
+        if codec_name is not None:
+            codec_confounder = NeuralCodecConfounder(sr=44100)
+        
         # Step 1-7: Comprehensive audio preprocessing
         audio = load_and_prep_audio(
             filepath,
-            sr=22050,
+            sr=44100,
             segment_duration=segment_duration,
             target_loudness=target_loudness,
-            hp_freq=hp_freq
+            hp_freq=hp_freq,
+            codec_name=codec_name,
+            codec_confounder=codec_confounder
         )
         
         if audio is None:
             return None, None
         
         # Step 8: Compute mel spectrogram
-        mel_spec = librosa.feature.melspectrogram(y=audio, sr=22050, n_mels=n_mels)
+        mel_spec = librosa.feature.melspectrogram(y=audio, sr=44100, n_mels=n_mels)
         
         # Step 9: Log scale
         mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
@@ -234,12 +253,14 @@ def load_dataset_comprehensive(
     segment_duration=5.0,
     target_loudness=-20.0,
     hp_freq=20,
-    num_workers=40
+    num_workers=20,
+    codec_name=None
 ):
     """
     Load dataset with comprehensive preprocessing:
     - Full audio preprocessing pipeline
     - Mel spectrogram extraction with normalization
+    - (Optional) Neural codec confounder application
     - Multiprocessing support for faster loading
     
     Args:
@@ -249,7 +270,8 @@ def load_dataset_comprehensive(
         segment_duration: Fixed segment duration in seconds (default 5.0s)
         target_loudness: Target RMS level in dB (default -20 dB)
         hp_freq: High-pass filter frequency in Hz (default 20 Hz)
-        num_workers: Number of processes for multiprocessing (default 4)
+        num_workers: Number of processes for multiprocessing (default 20)
+        codec_name: Optional neural codec name to apply as confounder
     
     Returns:
         X: Array of shape (n_samples, freq, time, 1)
@@ -260,11 +282,13 @@ def load_dataset_comprehensive(
     
     print(f"📊 Loading dataset from {manifest_csv}")
     print(f"   Settings: segment={segment_duration}s, loudness={target_loudness}dB, hp_filter={hp_freq}Hz")
+    if codec_name:
+        print(f"   Neural codec confounder: {codec_name}")
     print(f"   Using {num_workers} workers for multiprocessing")
     
     # Create argument tuples for each file
     args_list = [
-        (fp, lb, segment_duration, target_loudness, hp_freq, n_mels, target_shape) 
+        (fp, lb, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name) 
         for fp, lb in zip(df["filepath"], df["label"])
     ]
     
@@ -342,7 +366,7 @@ def load_dataset_with_transforms(manifest_csv, target_shape=(128, 128), n_mels=1
         
         try:
             # Load audio
-            audio, sr = librosa.load(filepath, sr=22050, duration=15)
+            audio, sr = librosa.load(filepath, sr=44100, duration=15)
             
             # Apply random transforms
             audio_transformed = apply_transform(audio, sr, transform=transform)

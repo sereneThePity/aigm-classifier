@@ -19,12 +19,12 @@ from scipy.io import wavfile
 # -----------------------------
 # Basic I/O
 # -----------------------------
-def load_audio(path, sr=22050, duration=None):
+def load_audio(path, sr=44100, duration=None):
     """Load audio file and resample."""
     y, sr = librosa.load(path, sr=sr, duration=duration, mono=False)
     return y, sr
 
-def save_audio(path, y, sr=22050):
+def save_audio(path, y, sr=44100):
     """Save numpy audio array to a file."""
     sf.write(path, y, sr)
 
@@ -91,12 +91,12 @@ def pitch_shift(y, sr, n_steps):
 
 def reverb(y, decay=0.5):
     """Add a simple reverberation via convolution."""
-    ir = np.zeros(int(0.3 * 22050))
+    ir = np.zeros(int(0.3 * 44100))
     ir[0] = 1.0
-    ir[int(0.02 * 22050)] = decay
+    ir[int(0.02 * 44100)] = decay
     return convolve(y, ir, mode='full')[:len(y)]
 
-def equalize(y, gain_db=6, freq=1000, sr=22050):
+def equalize(y, gain_db=6, freq=1000, sr=44100):
     """Simple parametric EQ boost around freq."""
     Q = 1.0
     w0 = 2 * np.pi * freq / sr

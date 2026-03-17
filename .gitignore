@@ -16,6 +16,7 @@ __pycache__/
 *.pyd
 *.tmp
 *.log
+*.err
 
 # Jupyter and environment files
 .ipynb_checkpoints/

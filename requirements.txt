@@ -12,3 +12,6 @@ tqdm
 yt-dlp
 pydub
 ffmpeg
+encodec                
+descript-audio-codec   
+soundstream-light
