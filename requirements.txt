@@ -14,4 +14,3 @@ pydub
 ffmpeg
 encodec                
 descript-audio-codec   
-soundstream-light

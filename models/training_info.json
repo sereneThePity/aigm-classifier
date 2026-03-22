@@ -3,9 +3,9 @@
   "epochs": 10,
   "batch_size": 16,
   "learning_rate": 0.001,
-  "test_accuracy": 50.0,
-  "test_loss": 0.6730839014053345,
-  "num_samples": 20,
+  "test_accuracy": 92.5,
+  "test_loss": 0.20768355786800385,
+  "num_samples": 1000,
   "num_classes": 2,
   "input_shape": [
     128,
