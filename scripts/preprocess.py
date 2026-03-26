@@ -6,6 +6,7 @@ from tqdm import tqdm
 import pandas as pd
 import argparse
 from multiprocessing import Pool
+from concurrent.futures import ThreadPoolExecutor
 from transforms import apply_transform
 from utils import (
     ROOT_DIR, 
@@ -125,7 +126,7 @@ def _process_audio_file(args_tuple):
     This function must be at module level to be pickleable for multiprocessing.
     Args: tuple of (filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name)
     """
-    filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name = args_tuple
+    filepath, label, segment_duration, target_loudness, hp_freqlayer, n_mels, target_shape, codec_name = args_tuple
     
     try:
         # Create codec confounder in worker process if needed
@@ -244,33 +245,62 @@ def load_dataset_comprehensive(
     return X, y
 
 
-def load_dataset(manifest_csv, target_shape=(128, 128)):
-    """Legacy function - use load_dataset_comprehensive instead."""
+def load_dataset(manifest_csv, target_shape=(128, 128), num_workers=40):
+    """
+    Load dataset using ThreadPoolExecutor for parallel I/O.
+    Threads are better for I/O-bound operations (file loading, network).
+    
+    Args:
+        manifest_csv: Path to CSV with 'filepath' and 'label' columns
+        target_shape: Target shape for mel spectrogram (freq, time)
+        num_workers: Number of threads to use (default 8)
+    
+    Returns:
+        X: array of shape (n_samples, freq, time, 1)
+        y: array of labels
+    """
     df = pd.read_csv(manifest_csv)
     X, y = [], []
 
-    
-    for _, row in tqdm(df.iterrows(), total=len(df)):
-        mel = extract_mel_spectrogram(row["filepath"])
-        if mel is None:
-            continue
+    def process_file(row):
+        """Process a single file and return (mel_spec, label) tuple."""
+        try:
+            mel = extract_mel_spectrogram(row["filepath"])
+            if mel is None:
+                return None, None
 
-        # --- Pad or crop to match training ---
-        if mel.shape[1] < target_shape[1]:
-            pad_width = target_shape[1] - mel.shape[1]
-            mel = np.pad(mel, ((0, 0), (0, pad_width)), mode="constant")
-        else:
-            mel = mel[:, :target_shape[1]]
+            # --- Pad or crop to match training ---
+            if mel.shape[1] < target_shape[1]:
+                pad_width = target_shape[1] - mel.shape[1]
+                mel = np.pad(mel, ((0, 0), (0, pad_width)), mode="constant")
+            else:
+                mel = mel[:, :target_shape[1]]
 
-        # --- Apply same per-sample normalization ---
-        mel = (mel - mel.min()) / (mel.max() - mel.min())
+            # --- Apply same per-sample normalization ---
+            mel = (mel - mel.min()) / (mel.max() - mel.min())
 
-        X.append(mel)
-        y.append(row["label"])
+            return mel, row["label"]
+        except Exception as e:
+            print(f"❌ Error processing {row['filepath']}: {e}")
+            return None, None
+
+    # Use ThreadPoolExecutor for parallel I/O
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        results = list(tqdm(
+            executor.map(process_file, [row for _, row in df.iterrows()]),
+            total=len(df),
+            desc="Loading dataset"
+        ))
+
+    # Collect successful results
+    for mel, label in results:
+        if mel is not None and label is not None:
+            X.append(mel)
+            y.append(label)
 
     X = np.array(X)[..., np.newaxis]  # add channel dim
     y = np.array(y)
-    print(f"Loaded dataset: {X.shape}, labels: {y.shape}")
+    print(f"✅ Loaded dataset: X.shape={X.shape}, y.shape={y.shape}")
     return X, y
 
 
