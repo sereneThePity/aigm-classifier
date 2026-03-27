@@ -89,7 +89,7 @@ if __name__ == '__main__':
     print(f"\n✅ Dataset loaded successfully")
     print(f"   Input shape: {input_shape}")
     print(f"   Unique labels: {unique_labels}")
-    print(f"   Label counts: {np.bincount(y)}")
+    print(f"   Label counts: {np.bincount(y.astype(int))}")
     print(f"   Number of classes: {num_classes}")
     print(f"   Total samples: {len(X)}")
     

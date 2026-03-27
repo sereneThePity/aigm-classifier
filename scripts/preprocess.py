@@ -126,7 +126,7 @@ def _process_audio_file(args_tuple):
     This function must be at module level to be pickleable for multiprocessing.
     Args: tuple of (filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name)
     """
-    filepath, label, segment_duration, target_loudness, hp_freqlayer, n_mels, target_shape, codec_name = args_tuple
+    filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name = args_tuple
     
     try:
         # Create codec confounder in worker process if needed
@@ -186,7 +186,7 @@ def load_dataset_comprehensive(
     segment_duration=5.0,
     target_loudness=-20.0,
     hp_freq=20,
-    num_workers=20,
+    num_workers=40,
     codec_name=None
 ):
     """
