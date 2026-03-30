@@ -129,7 +129,7 @@ def _init_worker(codec_name):
     """Pool initializer: create codec confounder once per worker process."""
     global _worker_codec_confounder
     if codec_name is not None:
-        _worker_codec_confounder = NeuralCodecConfounder(sr=44100)
+        _worker_codec_confounder = NeuralCodecConfounder(sr=44100, init_only=codec_name)
     else:
         _worker_codec_confounder = None
 
@@ -196,7 +196,7 @@ def load_dataset_comprehensive(
     segment_duration=5.0,
     target_loudness=-20.0,
     hp_freq=20,
-    num_workers=40,
+    num_workers=12,
     codec_name=None
 ):
     """

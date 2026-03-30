@@ -382,24 +382,58 @@ class NeuralCodecConfounder:
     Manages application of neural codec confounders to audio files.
     """
     
-    def __init__(self, sr: int = 44100):
+    def __init__(self, sr: int = 44100, init_only: Optional[str] = None):
         """
         Initialize confounder manager.
         
         Args:
             sr: Sample rate for all codecs
+            init_only: If specified, only initialize this codec (or all for 'random').
+                       None initializes all available codecs.
         """
         self.sr = sr
         self.codecs = {}
-        self._initialize_available_codecs()
+        self._initialize_available_codecs(init_only=init_only)
     
-    def _initialize_available_codecs(self):
-        """Initialize only available codecs."""
+    def _initialize_available_codecs(self, init_only: Optional[str] = None):
+        """Initialize only available codecs.
         
-        # Always available (librosa-based)
-        self.codecs["griffinmel"] = GriffinMelCodec(sr=self.sr)
-        self.codecs["audiolm"] = AudioLMCodecWrapper(sr=self.sr)
-        self.codecs["valle"] = VALLECodecWrapper(sr=self.sr)
+        Args:
+            init_only: If specified, only initialize this codec.
+                       Use 'random' or None to initialize all.
+        """
+        # Map of codec names to lightweight (librosa-based) constructors
+        lightweight = {
+            "griffinmel": lambda: GriffinMelCodec(sr=self.sr),
+            "audiolm": lambda: AudioLMCodecWrapper(sr=self.sr),
+            "valle": lambda: VALLECodecWrapper(sr=self.sr),
+        }
+        
+        # If a specific non-random codec is requested, only init that one
+        if init_only is not None and init_only != 'random':
+            if init_only in lightweight:
+                self.codecs[init_only] = lightweight[init_only]()
+                return
+            elif init_only == 'encodec_meta' and ENCODEC_AVAILABLE:
+                try:
+                    self.codecs['encodec_meta'] = MetaEnCodecWrapper(sr=self.sr)
+                except Exception as e:
+                    warnings.warn(f"Failed to load EnCodec: {e}")
+                return
+            elif init_only == 'dac' and DAC_AVAILABLE:
+                try:
+                    model_name = "44khz" if self.sr == 44100 else "16khz"
+                    self.codecs['dac'] = DACWrapper(sr=self.sr, model_name=model_name)
+                except Exception as e:
+                    warnings.warn(f"Failed to load DAC: {e}")
+                return
+            else:
+                warnings.warn(f"Codec '{init_only}' not available.")
+                return
+        
+        # Otherwise init all available codecs
+        for name, factory in lightweight.items():
+            self.codecs[name] = factory()
         
         # Conditionally available
         if ENCODEC_AVAILABLE:
