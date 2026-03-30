@@ -65,7 +65,10 @@ def load_model_auto(model_path):
 
 def evaluate(model_path, manifest_path, codec_name=None):
     model, model_type = load_model_auto(model_path)
-    X, y = load_dataset_comprehensive(manifest_path, codec_name=codec_name)
+    if model_type == 'keras':
+        X, y = load_dataset(manifest_path)
+    else:
+        X, y = load_dataset_comprehensive(manifest_path, codec_name=codec_name)
     
     if model_type == 'pytorch':
         # Convert to torch tensor and move to same device as model

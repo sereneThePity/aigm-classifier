@@ -100,6 +100,16 @@ def load_and_prep_audio(
         return None
 
 
+def extract_mel_spectrogram_keras(file_path, n_mels=128, duration=15, sr=22050):
+    try:
+        y, sr = librosa.load(file_path, sr=sr, duration=duration)
+        mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=n_mels)
+        mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
+        return mel_spec_db
+    except Exception as e:
+        print(f"Error loading {file_path}: {e}")
+        return None
+
 def extract_mel_spectrogram(file_path, n_mels=128, sr=44100):
     """Extract mel spectrogram from preprocessed audio."""
     try:
@@ -275,7 +285,7 @@ def load_dataset(manifest_csv, target_shape=(128, 128), num_workers=40):
     def process_file(row):
         """Process a single file and return (mel_spec, label) tuple."""
         try:
-            mel = extract_mel_spectrogram(row["filepath"])
+            mel = extract_mel_spectrogram_keras(row["filepath"])
             if mel is None:
                 return None, None
 
