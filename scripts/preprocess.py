@@ -86,7 +86,10 @@ def load_and_prep_audio(
         
         # 8. (Optional) Apply neural codec confounder
         if codec_name is not None and codec_confounder is not None:
-            codec_audio = codec_confounder.apply_codec(y, codec_name)
+            if codec_name == 'random':
+                codec_audio, _ = codec_confounder.apply_random_codec(y)
+            else:
+                codec_audio = codec_confounder.apply_codec(y, codec_name)
             if codec_audio is not None:
                 y = codec_audio
         
@@ -119,6 +122,18 @@ def extract_mel_spectrogram(file_path, n_mels=128, sr=44100):
         return None
 
 
+# Module-level variable for per-worker codec confounder (initialized via Pool initializer)
+_worker_codec_confounder = None
+
+def _init_worker(codec_name):
+    """Pool initializer: create codec confounder once per worker process."""
+    global _worker_codec_confounder
+    if codec_name is not None:
+        _worker_codec_confounder = NeuralCodecConfounder(sr=44100)
+    else:
+        _worker_codec_confounder = None
+
+
 # Module-level function for multiprocessing (must be at module level to be pickleable)
 def _process_audio_file(args_tuple):
     """
@@ -129,11 +144,6 @@ def _process_audio_file(args_tuple):
     filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name = args_tuple
     
     try:
-        # Create codec confounder in worker process if needed
-        codec_confounder = None
-        if codec_name is not None:
-            codec_confounder = NeuralCodecConfounder(sr=44100)
-        
         # Step 1-7: Comprehensive audio preprocessing
         audio = load_and_prep_audio(
             filepath,
@@ -142,7 +152,7 @@ def _process_audio_file(args_tuple):
             target_loudness=target_loudness,
             hp_freq=hp_freq,
             codec_name=codec_name,
-            codec_confounder=codec_confounder
+            codec_confounder=_worker_codec_confounder
         )
         
         if audio is None:
@@ -205,7 +215,7 @@ def load_dataset_comprehensive(
         hp_freq: High-pass filter frequency in Hz (default 20 Hz)
         num_workers: Number of processes for multiprocessing (default 20)
         codec_name: Optional neural codec name to apply as confounder
-    
+    tuning curve
     Returns:
         X: Array of shape (n_samples, freq, time, 1)
         y: Array of labels
@@ -225,8 +235,8 @@ def load_dataset_comprehensive(
         for fp, lb in zip(df["filepath"], df["label"])
     ]
     
-    # Process files in parallel
-    with Pool(num_workers) as pool:
+    # Process files in parallel (codec initialized once per worker, not per file)
+    with Pool(num_workers, initializer=_init_worker, initargs=(codec_name,)) as pool:
         results = list(tqdm(pool.imap(_process_audio_file, args_list), 
                            total=len(df), desc="Processing"))
     

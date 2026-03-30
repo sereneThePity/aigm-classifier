@@ -63,9 +63,9 @@ def load_model_auto(model_path):
     else:
         raise ValueError(f"Unsupported model format: {model_path}. Use .pt (PyTorch) or .keras (Keras)")
 
-def evaluate(model_path, manifest_path):
+def evaluate(model_path, manifest_path, codec_name=None):
     model, model_type = load_model_auto(model_path)
-    X, y = load_dataset_comprehensive(manifest_path)
+    X, y = load_dataset_comprehensive(manifest_path, codec_name=codec_name)
     
     if model_type == 'pytorch':
         # Convert to torch tensor and move to same device as model
@@ -134,9 +134,10 @@ def evaluate_with_transform(model_path, manifest_path, n_mels=128, target_shape=
 def extract_intermediate_activations(model_path, manifest_path, layer_name=None, save_path="intermediate_activations.npy"):
     model, model_type = load_model_auto(model_path)
     
-    X, y = load_dataset(manifest_path)
+    
 
     if model_type == 'keras':
+        X, y = load_dataset(manifest_path)
         model.summary()  # useful to see layer names if you don't know them yet
 
         # Pick layer by name or default to penultimate
@@ -159,6 +160,8 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
     
     else:  # PyTorch model
         # Use forward hook to capture intermediate activations
+        X, y = load_dataset_comprehensive(manifest_path)
+
         activation = {}
         
         def get_activation(name):
@@ -193,6 +196,7 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         # Get features from activation
         features = activation[layer_name].cpu().numpy()
         print(f"✅ Extracted features from layer '{layer_name}', shape: {features.shape}")
+        
 
     # Optional: flatten features if needed
     if len(features.shape) > 2:
@@ -200,7 +204,7 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         print(f"Flattened feature shape: {features.shape}")
 
     # Save to disk for later use
-    processed_dir = os.path.join(DATA_DIR, "/processed")
+    processed_dir = os.path.join(DATA_DIR, "processed")
     os.makedirs(processed_dir, exist_ok=True)
     np.save(save_path, features)
     np.save(os.path.join(processed_dir, "y_labels"), y)
@@ -218,6 +222,7 @@ if __name__ == "__main__":
     eval_parser = subparsers.add_parser('evaluate', help='Evaluate model without transforms')
     eval_parser.add_argument('--model_path', required=True, help='Path to the model')
     eval_parser.add_argument('--manifest_path', required=True, help='Path to the manifest CSV')
+    eval_parser.add_argument('--codec_name', default=None, help='Codec to apply (random, encodec_meta, dac, griffinmel, audiolm, valle)')
 
     # Subparser for evaluate_with_transform
     eval_trans_parser = subparsers.add_parser('evaluate_transform', help='Evaluate model with transforms')
@@ -238,7 +243,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.command == 'evaluate':
-        evaluate(args.model_path, args.manifest_path)
+        evaluate(args.model_path, args.manifest_path, codec_name=args.codec_name)
     elif args.command == 'evaluate_transform':
         target_shape = (args.freq, args.time)
         evaluate_with_transform(args.model_path, args.manifest_path, args.n_mels, target_shape, args.transform)
