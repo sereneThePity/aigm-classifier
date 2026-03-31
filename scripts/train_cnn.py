@@ -10,18 +10,36 @@ from torch.utils.data import TensorDataset, DataLoader
 from sklearn.model_selection import train_test_split
 from utils import ROOT_DIR, DATA_DIR
 from preprocess import load_dataset_comprehensive
+from neural_codec_confounders import get_available_codecs
 
 
 class SimpleCNN(nn.Module):
     def __init__(self, input_shape, num_classes):
         super(SimpleCNN, self).__init__()
-        self.reshape = nn.Identity()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        # 6 convolutional layers with filters [16, 32, 64, 128, 256, 512]
+        # Kernel size 3, pooling size 2
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+        self.conv4 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+        self.conv5 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.pool5 = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+        self.conv6 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
+        self.pool6 = nn.MaxPool2d(kernel_size=2, stride=2)
+        
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc1 = nn.Linear(64, 64)
-        self.fc2 = nn.Linear(64, num_classes)
+        self.fc1 = nn.Linear(512, 256)
+        self.dropout = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(256, num_classes)
     
     def forward(self, x):
         # Remove any trailing singleton dimensions
@@ -30,12 +48,31 @@ class SimpleCNN(nn.Module):
         # Add channel dimension if needed
         if x.dim() == 3:
             x = x.unsqueeze(1)
+        
+        # 6 convolutional blocks
         x = torch.relu(self.conv1(x))
         x = self.pool1(x)
+        
         x = torch.relu(self.conv2(x))
+        x = self.pool2(x)
+        
+        x = torch.relu(self.conv3(x))
+        x = self.pool3(x)
+        
+        x = torch.relu(self.conv4(x))
+        x = self.pool4(x)
+        
+        x = torch.relu(self.conv5(x))
+        x = self.pool5(x)
+        
+        x = torch.relu(self.conv6(x))
+        x = self.pool6(x)
+        
+        # Global average pooling and fully connected layers
         x = self.global_pool(x)
         x = x.view(x.size(0), -1)  # Flatten
         x = torch.relu(self.fc1(x))
+        x = self.dropout(x)
         x = self.fc2(x)
         return x
 
@@ -55,6 +92,7 @@ if __name__ == '__main__':
     parser.add_argument('--val_split', type=float, default=0.2, help='Validation set fraction')
     parser.add_argument('--segment_duration', type=float, default=5.0, help='Audio segment duration in seconds')
     parser.add_argument('--n_mels', type=int, default=128, help='Number of mel frequency bins')
+    parser.add_argument('--use_codecs', action='store_true', help='Apply random neural codecs to audio during training')
     args = parser.parse_args()
     
     print("=" * 70)
@@ -72,13 +110,26 @@ if __name__ == '__main__':
     print(f"   Segment duration: {args.segment_duration}s")
     print(f"   Mel frequency bins: {args.n_mels}")
     
+    # Setup codec augmentation if requested
+    codec_name = None
+    if args.use_codecs:
+        available_codecs = get_available_codecs()
+        if available_codecs:
+            codec_name = 'random'  # Apply random codec per sample
+            print(f"   Neural codec augmentation: ENABLED (random codec per sample)")
+            print(f"   Available codecs: {', '.join(available_codecs)}")
+        else:
+            print(f"   ⚠️  Neural codec augmentation requested but no codecs available")
+            codec_name = None
+    
     X, y = load_dataset_comprehensive(
         args.manifest,
         n_mels=args.n_mels,
         target_shape=(args.n_mels, 128),
         segment_duration=args.segment_duration,
         target_loudness=-20.0,
-        hp_freq=20
+        hp_freq=20,
+        codec_name=codec_name
     )
     
     # Compute input shape from loaded data
@@ -233,7 +284,7 @@ if __name__ == '__main__':
     # Save model
     models_dir = os.path.join(ROOT_DIR, 'models')
     os.makedirs(models_dir, exist_ok=True)
-    model_path = os.path.join(models_dir, 'cnn_model.pt')
+    model_path = os.path.join(models_dir, 'cnn_model_hpc.pt')
     torch.save(model.state_dict(), model_path)
     
     # Save training info
@@ -251,7 +302,7 @@ if __name__ == '__main__':
         'n_mels': args.n_mels,
     }
     
-    info_path = os.path.join(models_dir, 'training_info.json')
+    info_path = os.path.join(models_dir, 'training_info_hpc.json')
     with open(info_path, 'w') as f:
         json.dump(training_info, f, indent=2)
     
