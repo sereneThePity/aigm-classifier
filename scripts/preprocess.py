@@ -5,6 +5,7 @@ import librosa.display
 from tqdm import tqdm
 import pandas as pd
 import argparse
+import time
 from multiprocessing import Pool
 from concurrent.futures import ThreadPoolExecutor
 from transforms import apply_transform
@@ -53,45 +54,79 @@ def load_and_prep_audio(
         audio: Preprocessed audio array, or None if failed
     """
     try:
-        # 1. Load audio and automatically convert to mono in librosa.load
+        t_start = time.time()
+        file_basename = os.path.basename(file_path)
+        
+        # 1. Load audio
+        t = time.time()
         y, loaded_sr = librosa.load(file_path, sr=None, mono=True)
+        t_load = time.time() - t
         
         # 2. Mono conversion (already done by librosa with mono=True)
         # y is now mono
         
         # 3. Resample to target sr if needed
+        t = time.time()
         if loaded_sr != sr:
             y = librosa.resample(y, orig_sr=loaded_sr, target_sr=sr)
+        t_resample = time.time() - t
         
-        # 4. Loudness normalize (RMS-based, LUFS approximation)
+        # 4. Loudness normalize
+        t = time.time()
         y = normalize_audio(y, method='db', target=target_loudness)
+        t_normalize = time.time() - t
         
         # 5. Trim silence
+        t = time.time()
         y, _ = librosa.effects.trim(y, top_db=40)
+        t_trim = time.time() - t
         
         # 6. Random crop to fixed-length segment
+        t = time.time()
         segment_samples = int(segment_duration * sr)
         if len(y) >= segment_samples:
-            # Random starting point
             max_start = len(y) - segment_samples
             start_idx = np.random.randint(0, max_start + 1)
             y = y[start_idx:start_idx + segment_samples]
         else:
-            # Pad with zeros if shorter than segment duration
             pad_width = segment_samples - len(y)
             y = np.pad(y, (0, pad_width), mode='constant')
+        t_crop = time.time() - t
         
-        # 7. High-pass filter (20 Hz)
+        # 7. High-pass filter
+        t = time.time()
         y = apply_highpass_filter(y, sr, cutoff_freq=hp_freq)
+        t_hpfilter = time.time() - t
         
         # 8. (Optional) Apply neural codec confounder
+        t_codec = 0
         if codec_name is not None and codec_confounder is not None:
+            t = time.time()
             if codec_name == 'random':
-                codec_audio, _ = codec_confounder.apply_random_codec(y)
+                codec_audio, used_codec = codec_confounder.apply_random_codec(y)
+                codec_used = used_codec
             else:
                 codec_audio = codec_confounder.apply_codec(y, codec_name)
+                codec_used = codec_name
+            t_codec = time.time() - t
             if codec_audio is not None:
                 y = codec_audio
+        
+        t_total = time.time() - t_start
+        
+        # Log timing info (only for first few files to avoid spam)
+        import threading
+        if not hasattr(load_and_prep_audio, '_count'):
+            load_and_prep_audio._count = 0
+        load_and_prep_audio._count += 1
+        
+        if load_and_prep_audio._count <= 5:  # First 5 files only
+            print(f"[Timing] {file_basename}:")
+            print(f"  Load: {t_load:.3f}s | Resample: {t_resample:.3f}s | Normalize: {t_normalize:.3f}s")
+            print(f"  Trim: {t_trim:.3f}s | Crop: {t_crop:.3f}s | HPFilter: {t_hpfilter:.3f}s | Codec: {t_codec:.3f}s")
+            print(f"  TOTAL: {t_total:.3f}s")
+        elif load_and_prep_audio._count == 6:
+            print(f"[Timing] (hiding timing for remaining files...)")
         
         return y
     
@@ -138,9 +173,14 @@ _worker_codec_confounder = None
 def _init_worker(codec_name):
     """Pool initializer: create codec confounder once per worker process."""
     global _worker_codec_confounder
+    import os
+    worker_pid = os.getpid()
     if codec_name is not None:
+        print(f"[WorkerInit] Worker PID {worker_pid}: Initializing codec '{codec_name}'")
         _worker_codec_confounder = NeuralCodecConfounder(sr=44100, init_only=codec_name)
+        print(f"[WorkerInit] Worker PID {worker_pid}: codec initialization complete")
     else:
+        print(f"[WorkerInit] Worker PID {worker_pid}: No codec requested")
         _worker_codec_confounder = None
 
 

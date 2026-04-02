@@ -92,7 +92,9 @@ if __name__ == '__main__':
     parser.add_argument('--val_split', type=float, default=0.2, help='Validation set fraction')
     parser.add_argument('--segment_duration', type=float, default=5.0, help='Audio segment duration in seconds')
     parser.add_argument('--n_mels', type=int, default=128, help='Number of mel frequency bins')
-    parser.add_argument('--use_codecs', action='store_true', help='Apply random neural codecs to audio during training')
+    parser.add_argument('--num_workers', type=int, default=12, help='Number of workers for multiprocessing (reduce to 2-4 when using codecs)')
+    parser.add_argument('--codec', nargs='?', const='random', default=None, 
+                        help='Apply neural codec to audio during training. Use "random" (default) to pick random codec per sample, or specify a codec name (e.g., encodec_meta, dac)')
     args = parser.parse_args()
     
     print("=" * 70)
@@ -112,16 +114,26 @@ if __name__ == '__main__':
     
     # Setup codec augmentation if requested
     codec_name = None
-    if args.use_codecs:
+    if args.codec:
+        print(f"\n🔧 Codec Augmentation Setup:")
         available_codecs = get_available_codecs()
         if available_codecs:
-            codec_name = 'random'  # Apply random codec per sample
-            print(f"   Neural codec augmentation: ENABLED (random codec per sample)")
-            print(f"   Available codecs: {', '.join(available_codecs)}")
+            # Validate codec_name if it's not 'random'
+            if args.codec != 'random' and args.codec not in available_codecs:
+                print(f"   ⚠️  Codec '{args.codec}' not available. Available: {', '.join(available_codecs)}")
+                print(f"   Defaulting to random codec selection")
+                codec_name = 'random'
+            else:
+                codec_name = args.codec
+                codec_type = "random codec per sample" if codec_name == 'random' else f"'{codec_name}' codec"
+                print(f"   ✓ Codec augmentation: ENABLED ({codec_type})")
+                print(f"   ✓ Available codecs: {', '.join(available_codecs)}")
         else:
             print(f"   ⚠️  Neural codec augmentation requested but no codecs available")
             codec_name = None
     
+    print(f"\n📊 Loading dataset with codec: {codec_name if codec_name else 'None (no augmentation)'}")
+    print(f"   Workers: {args.num_workers}")
     X, y = load_dataset_comprehensive(
         args.manifest,
         n_mels=args.n_mels,
@@ -129,6 +141,7 @@ if __name__ == '__main__':
         segment_duration=args.segment_duration,
         target_loudness=-20.0,
         hp_freq=20,
+        num_workers=args.num_workers,
         codec_name=codec_name
     )
     
