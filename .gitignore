@@ -9,7 +9,8 @@ models/checkpoints/
 *.flac
 *.ogg
 
-*.pip
+*.pip/
+
 
 # Python cache and temp
 __pycache__/

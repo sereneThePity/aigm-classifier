@@ -8,8 +8,8 @@
 #SBATCH --mem=40G
 #SBATCH --gres=gpu:H100.80gb:1
 #SBATCH --mail-type=NONE
-#SBATCH --output=logs/slurm_%j.out
-#SBATCH --error=logs/slurm_%j.err
+#SBATCH --output=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.out
+#SBATCH --error=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.err
 
 # SLURM Script to train CNN classifier using GPU on HPC
 # Submit with: sbatch train_cnn_gpu.sh
@@ -71,9 +71,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Get the directory of this script
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# Get project root - use SLURM_SUBMIT_DIR if available (most reliable)
+# SLURM_SUBMIT_DIR is the directory where sbatch was run
+if [ -n "$SLURM_SUBMIT_DIR" ]; then
+    PROJECT_ROOT="$SLURM_SUBMIT_DIR"
+else
+    # Fallback for non-SLURM execution
+    SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
+    SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+    PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+fi
+
+# Ensure logs directory exists (required for SLURM output redirection)
+mkdir -p "$PROJECT_ROOT/logs" 2>/dev/null || true
 
 # Source bashrc to load environment
 echo -e "${YELLOW}[*] Sourcing bashrc and activating conda environment...${NC}"
@@ -169,6 +179,8 @@ python3 "$PROJECT_ROOT/scripts/train_cnn.py" \
     --val_split "$VAL_SPLIT" \
     --segment_duration "$SEGMENT_DURATION" \
     --n_mels "$N_MELS" \
+    --codec random \
+    --num_workers 1 \
     2>&1 | tee "$LOG_FILE"
 
 EXIT_CODE=$?
