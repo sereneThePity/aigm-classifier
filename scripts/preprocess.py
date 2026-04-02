@@ -114,20 +114,6 @@ def load_and_prep_audio(
         
         t_total = time.time() - t_start
         
-        # Log timing info (only for first few files to avoid spam)
-        import threading
-        if not hasattr(load_and_prep_audio, '_count'):
-            load_and_prep_audio._count = 0
-        load_and_prep_audio._count += 1
-        
-        if load_and_prep_audio._count <= 5:  # First 5 files only
-            print(f"[Timing] {file_basename}:")
-            print(f"  Load: {t_load:.3f}s | Resample: {t_resample:.3f}s | Normalize: {t_normalize:.3f}s")
-            print(f"  Trim: {t_trim:.3f}s | Crop: {t_crop:.3f}s | HPFilter: {t_hpfilter:.3f}s | Codec: {t_codec:.3f}s")
-            print(f"  TOTAL: {t_total:.3f}s")
-        elif load_and_prep_audio._count == 6:
-            print(f"[Timing] (hiding timing for remaining files...)")
-        
         return y
     
     except Exception as e:
@@ -169,19 +155,17 @@ def extract_mel_spectrogram(file_path, n_mels=128, sr=44100):
 
 # Module-level variable for per-worker codec confounder (initialized via Pool initializer)
 _worker_codec_confounder = None
+_worker_codec_cache = {}  # Cache for codecs loaded per-file in balanced distribution
 
 def _init_worker(codec_name):
     """Pool initializer: create codec confounder once per worker process."""
-    global _worker_codec_confounder
-    import os
-    worker_pid = os.getpid()
+    global _worker_codec_confounder, _worker_codec_cache
     if codec_name is not None:
-        print(f"[WorkerInit] Worker PID {worker_pid}: Initializing codec '{codec_name}'")
         _worker_codec_confounder = NeuralCodecConfounder(sr=44100, init_only=codec_name)
-        print(f"[WorkerInit] Worker PID {worker_pid}: codec initialization complete")
     else:
-        print(f"[WorkerInit] Worker PID {worker_pid}: No codec requested")
         _worker_codec_confounder = None
+    
+    _worker_codec_cache = {}  # Initialize codec cache for this worker
 
 
 # Module-level function for multiprocessing (must be at module level to be pickleable)
@@ -191,9 +175,27 @@ def _process_audio_file(args_tuple):
     This function must be at module level to be pickleable for multiprocessing.
     Args: tuple of (filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name)
     """
+    global _worker_codec_confounder, _worker_codec_cache
+    
     filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name = args_tuple
     
     try:
+        # Create codec confounder if codec_name is specified
+        # This ensures each file gets the right codec even with balanced distribution
+        local_codec_confounder = None
+        if codec_name is not None and codec_name != 'random':
+            # Check if codec already loaded in this worker
+            if codec_name in _worker_codec_cache:
+                # Use cached codec
+                local_codec_confounder = _worker_codec_cache[codec_name]
+            elif _worker_codec_confounder is not None:
+                # Use pre-initialized codec from worker (same codec for all files)
+                local_codec_confounder = _worker_codec_confounder
+            else:
+                # Initialize codec once and cache it for this worker
+                local_codec_confounder = NeuralCodecConfounder(sr=44100, init_only=codec_name)
+                _worker_codec_cache[codec_name] = local_codec_confounder
+        
         # Step 1-7: Comprehensive audio preprocessing
         audio = load_and_prep_audio(
             filepath,
@@ -202,7 +204,7 @@ def _process_audio_file(args_tuple):
             target_loudness=target_loudness,
             hp_freq=hp_freq,
             codec_name=codec_name,
-            codec_confounder=_worker_codec_confounder
+            codec_confounder=local_codec_confounder
         )
         
         if audio is None:
@@ -265,7 +267,8 @@ def load_dataset_comprehensive(
         hp_freq: High-pass filter frequency in Hz (default 20 Hz)
         num_workers: Number of processes for multiprocessing (default 20)
         codec_name: Optional neural codec name to apply as confounder
-    tuning curve
+                    If 'random', will equally distribute all available codecs
+    
     Returns:
         X: Array of shape (n_samples, freq, time, 1)
         y: Array of labels
@@ -273,20 +276,46 @@ def load_dataset_comprehensive(
     df = pd.read_csv(manifest_csv)
     X, y = [], []
     
-    print(f"📊 Loading dataset from {manifest_csv}")
-    print(f"   Settings: segment={segment_duration}s, loudness={target_loudness}dB, hp_filter={hp_freq}Hz")
+    print(f"📊 Loading dataset: {manifest_csv}")
+    print(f"   Segment: {segment_duration}s | Target loudness: {target_loudness}dB | HP filter: {hp_freq}Hz")
+    
+    codec_info = ""
     if codec_name:
-        print(f"   Neural codec confounder: {codec_name}")
-    print(f"   Using {num_workers} workers for multiprocessing")
+        if codec_name == 'random':
+            codec_info = "RANDOM (balanced distribution)"
+        else:
+            codec_info = codec_name
+    else:
+        codec_info = "None"
+    print(f"   Codec: {codec_info} | Workers: {num_workers}")
+    
+    # If codec_name is 'random', create balanced codec assignments
+    assigned_codecs = None
+    if codec_name == 'random':
+        # Initialize a temporary confounder to get available codecs
+        temp_confounder = NeuralCodecConfounder(sr=44100)
+        available_codecs = temp_confounder.get_available_codecs()
+        
+        # Create balanced assignment: repeat each codec equally
+        num_files = len(df)
+        num_codecs = len(available_codecs)
+        repetitions = (num_files + num_codecs - 1) // num_codecs  # Ceiling division
+        
+        assigned_codecs = (available_codecs * repetitions)[:num_files]
+        np.random.shuffle(assigned_codecs)  # Shuffle for randomness
+        
+        print(f"   Balanced codec distribution ({num_codecs} codecs):")
     
     # Create argument tuples for each file
-    args_list = [
-        (fp, lb, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name) 
-        for fp, lb in zip(df["filepath"], df["label"])
-    ]
+    args_list = []
+    for i, (fp, lb) in enumerate(zip(df["filepath"], df["label"])):
+        # Use assigned codec if available, otherwise use the codec_name passed in
+        assigned_codec = assigned_codecs[i] if assigned_codecs is not None else codec_name
+        args_list.append((fp, lb, segment_duration, target_loudness, hp_freq, n_mels, target_shape, assigned_codec))
     
     # Process files in parallel (codec initialized once per worker, not per file)
-    with Pool(num_workers, initializer=_init_worker, initargs=(codec_name,)) as pool:
+    init_codec = None if assigned_codecs is not None else codec_name
+    with Pool(num_workers, initializer=_init_worker, initargs=(init_codec,)) as pool:
         results = list(tqdm(pool.imap(_process_audio_file, args_list), 
                            total=len(df), desc="Processing"))
     
@@ -299,8 +328,7 @@ def load_dataset_comprehensive(
     X = np.array(X)[..., np.newaxis]  # Add channel dimension
     y = np.array(y)
     
-    print(f"✅ Loaded dataset: X.shape={X.shape}, y.shape={y.shape}")
-    print(f"   Class distribution: {np.bincount(y.astype(int))}")
+    print(f"✅ Loaded {len(X)} samples | Shape: {X.shape} | Classes: {np.bincount(y.astype(int))}")
     
     return X, y
 

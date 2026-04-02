@@ -412,87 +412,47 @@ class NeuralCodecConfounder:
         # If a specific non-random codec is requested, only init that one
         if init_only is not None and init_only != 'random':
             if init_only in lightweight:
-                print(f"[CodecInit] Loading CPU codec: {init_only}")
                 self.codecs[init_only] = lightweight[init_only]()
-                print(f"[CodecInit] ✓ {init_only} loaded successfully (CPU-based)")
                 return
             elif init_only == 'encodec_meta' and ENCODEC_AVAILABLE:
                 try:
-                    print(f"[CodecInit] Loading GPU codec: encodec_meta")
-                    print(f"[CodecInit]   - model: Meta EnCodec 24kHz")
-                    print(f"[CodecInit]   - device: {'GPU' if torch.cuda.is_available() else 'CPU'}")
                     self.codecs['encodec_meta'] = MetaEnCodecWrapper(sr=self.sr)
-                    print(f"[CodecInit] ✓ encodec_meta loaded successfully")
                 except Exception as e:
-                    print(f"[CodecInit] ✗ Failed to load encodec_meta: {e}")
                     warnings.warn(f"Failed to load EnCodec: {e}")
                 return
             elif init_only == 'dac' and DAC_AVAILABLE:
                 try:
-                    print(f"[CodecInit] Loading GPU codec: dac")
                     model_name = "44khz" if self.sr == 44100 else "16khz"
-                    print(f"[CodecInit]   - model: Descript Audio Codec ({model_name})")
-                    print(f"[CodecInit]   - device: {'GPU' if torch.cuda.is_available() else 'CPU'}")
                     self.codecs['dac'] = DACWrapper(sr=self.sr, model_name=model_name)
-                    print(f"[CodecInit] ✓ dac loaded successfully")
                 except Exception as e:
-                    print(f"[CodecInit] ✗ Failed to load dac: {e}")
                     warnings.warn(f"Failed to load DAC: {e}")
                 return
             else:
-                print(f"[CodecInit] ✗ Codec '{init_only}' not available.")
                 warnings.warn(f"Codec '{init_only}' not available.")
                 return
         
         # Otherwise init all available codecs
-        print(f"[CodecInit] Initializing all available codecs (sr={self.sr}Hz)...")
-        print(f"[CodecInit] CPU-based codecs:")
         for name, factory in lightweight.items():
-            print(f"[CodecInit]   Loading {name}...")
             self.codecs[name] = factory()
-            print(f"[CodecInit]   ✓ {name} loaded")
         
         # Conditionally available
-        print(f"[CodecInit] GPU-based codecs:")
         if ENCODEC_AVAILABLE:
             try:
-                print(f"[CodecInit]   Loading encodec_meta...")
-                print(f"[CodecInit]     - Meta EnCodec 24kHz model")
-                print(f"[CodecInit]     - device: {'GPU' if torch.cuda.is_available() else 'CPU'}")
                 self.codecs["encodec_meta"] = MetaEnCodecWrapper(sr=self.sr)
-                print(f"[CodecInit]   ✓ encodec_meta loaded")
             except Exception as e:
-                print(f"[CodecInit]   ✗ Failed to load encodec_meta: {e}")
                 warnings.warn(f"Failed to load EnCodec: {e}")
-        else:
-            print(f"[CodecInit]   - encodec_meta: NOT AVAILABLE (install with: pip install encodec)")
         
         if DAC_AVAILABLE:
             try:
-                print(f"[CodecInit]   Loading dac...")
                 if self.sr in [16000, 44100]:
                     model_name = "44khz" if self.sr == 44100 else "16khz"
-                    print(f"[CodecInit]     - Descript Audio Codec ({model_name} model)")
-                    print(f"[CodecInit]     - device: {'GPU' if torch.cuda.is_available() else 'CPU'}")
                     self.codecs["dac"] = DACWrapper(sr=self.sr, model_name=model_name)
-                    print(f"[CodecInit]   ✓ dac loaded")
             except Exception as e:
-                print(f"[CodecInit]   ✗ Failed to load dac: {e}")
                 warnings.warn(f"Failed to load DAC: {e}")
-        else:
-            print(f"[CodecInit]   - dac: NOT AVAILABLE (install with: pip install descript-audio-codec)")
-        
-        # Summary of loaded codecs
-        if self.codecs:
-            print(f"[CodecInit] ✓ Successfully loaded {len(self.codecs)} codec(s): {', '.join(self.codecs.keys())}")
-        else:
-            print(f"[CodecInit] ⚠ WARNING: No codecs were loaded!")
     
     def get_available_codecs(self) -> List[str]:
         """Return list of available codecs."""
-        available = list(self.codecs.keys())
-        print(f"[CodecDebug] Available codecs: {available}")
-        return available
+        return list(self.codecs.keys())
     
     def apply_codec(self, audio: np.ndarray, codec_name: str) -> Optional[np.ndarray]:
         """
@@ -506,18 +466,14 @@ class NeuralCodecConfounder:
             Processed audio or None if codec not available
         """
         if codec_name not in self.codecs:
-            print(f"[CodecDebug] ✗ Codec '{codec_name}' not available. Available: {self.get_available_codecs()}")
             warnings.warn(f"Codec '{codec_name}' not available. Available: {self.get_available_codecs()}")
             return None
         
         try:
-            print(f"[CodecDebug] Applying codec: {codec_name} (audio shape: {audio.shape})")
             codec = self.codecs[codec_name]
             processed = codec.process_audio(audio)
-            print(f"[CodecDebug] ✓ {codec_name} applied successfully (output shape: {processed.shape})")
             return processed
         except Exception as e:
-            print(f"[CodecDebug] ✗ Error applying codec '{codec_name}': {e}")
             warnings.warn(f"Error applying codec '{codec_name}': {e}")
             return None
     
@@ -533,12 +489,10 @@ class NeuralCodecConfounder:
         """
         available = self.get_available_codecs()
         if not available:
-            print(f"[CodecDebug] ✗ No codecs available")
             warnings.warn("No codecs available")
             return audio, "none"
         
         codec_name = np.random.choice(available)
-        print(f"[CodecDebug] Random codec selected: {codec_name}")
         processed = self.apply_codec(audio, codec_name)
         
         if processed is None:

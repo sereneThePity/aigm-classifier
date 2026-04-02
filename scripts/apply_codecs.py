@@ -69,7 +69,9 @@ class CodecApplier:
             
             # Save if output path specified
             if output_path:
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                output_dir = os.path.dirname(output_path)
+                if output_dir:  # Only create directory if path has a directory component
+                    os.makedirs(output_dir, exist_ok=True)
                 sf.write(output_path, processed, self.sr)
                 print(f"✅ {audio_path} → {output_path}")
             

@@ -4,8 +4,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=40G
+#SBATCH --cpus-per-task=40
 #SBATCH --gres=gpu:H100.80gb:1
 #SBATCH --mail-type=NONE
 #SBATCH --output=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.out
@@ -180,7 +179,7 @@ python3 "$PROJECT_ROOT/scripts/train_cnn.py" \
     --segment_duration "$SEGMENT_DURATION" \
     --n_mels "$N_MELS" \
     --codec random \
-    --num_workers 1 \
+    --num_workers 4 \
     2>&1 | tee "$LOG_FILE"
 
 EXIT_CODE=$?
