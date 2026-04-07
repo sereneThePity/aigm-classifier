@@ -28,42 +28,54 @@ from utils import ROOT_DIR, DATA_DIR
 class TopKSAE:
     """Wrapper for topK Sparse Autoencoder from overcomplete library."""
     
-    def __init__(self, input_dim, hidden_dim, k_percent=5, device='cpu'):
+    def __init__(self, input_shape, nb_concepts, top_k=None, device='cpu'):
         """
         Initialize topK SAE.
         
         Args:
-            input_dim: Size of input (flattened patch)
-            hidden_dim: Hidden dimension / expansion ratio for overcomplete representation
-            k_percent: Percentage of hidden units to activate (sparsity control)
+            input_shape: Shape of input (e.g., 1024 for flattened patch)
+            nb_concepts: Number of concepts / hidden dimension for sparse codes
+            top_k: Number of top activations to keep (if None, uses all)
             device: 'cpu' or 'cuda'
         """
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.k_percent = k_percent
+        self.input_shape = input_shape
+        self.nb_concepts = nb_concepts
+        self.top_k = top_k
         self.device = device
         
         # Create overcomplete SAE model
-        self.model = overcomplete.models.TopK(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            k_percent=k_percent,
-        ).to(device)
+        self.model = overcomplete.sae.TopKSAE(
+            input_shape=input_shape,
+            nb_concepts=nb_concepts,
+            top_k=top_k,
+            device=device
+        )
         
         self.device_obj = torch.device(device)
     
     def encode(self, x):
-        """Get sparse codes from input."""
-        return self.model.encode(x)
+        """Get sparse codes from input.
+        
+        overcomplete.sae.TopKSAE.encode() returns a tuple (codes, other_outputs)
+        """
+        result = self.model.encode(x)
+        # Handle tuple return from overcomplete
+        if isinstance(result, tuple):
+            codes = result[0]
+        else:
+            codes = result
+        return codes
     
     def decode(self, codes):
         """Reconstruct from codes."""
-        return self.model.decode(codes.detach())
+        if isinstance(codes, torch.Tensor):
+            codes = codes.detach()
+        return self.model.decode(codes)
     
     def forward(self, x):
         """Full forward pass."""
-        codes = self.model.encode(x)
-        recon = self.model.decode(codes.detach())
+        codes = self.encode(x)
+        recon = self.decode(codes)
         return recon, codes
     
     def to(self, device):
@@ -91,48 +103,92 @@ class TopKSAE:
 
 
 def extract_patches(images, patch_size):
-    """Extract patches from spectrogram images using einops.
+    """Extract patches from images using einops.
+    
+    Handles 2D (H, W), 3D (N, H, W) and 4D (N, H, W, C) arrays.
+    Automatically pads image dimensions to be divisible by patch_size.
     
     Args:
-        images: (N, H, W) array of spectrograms
+        images: (H, W), (N, H, W) or (N, H, W, C) array
         patch_size: Tuple (patch_h, patch_w)
     
     Returns:
-        patches: (N, num_patches_h, num_patches_w, patch_h*patch_w) array
-        patch_dims: (num_patches_h, num_patches_w, patch_h*patch_w)
+        patches: (N*num_patches_h*num_patches_w, patch_dim) array
+        patch_dims: (num_patches_h, num_patches_w, patch_dim)
     """
-    N, H, W = images.shape
     ph, pw = patch_size
     
-    # Use einops to extract patches
-    patches = rearrange(
-        images,
-        'n (nh ph) (nw pw) -> (n nh nw) (ph pw)',
-        ph=ph, pw=pw
-    )
+    if images.ndim == 2:
+        # Single 2D image: (H, W)
+        H, W = images.shape
+        images = images[np.newaxis, :, :]  # Add batch dimension
+    elif images.ndim == 3:
+        N, H, W = images.shape
+    elif images.ndim == 4:
+        N, H, W, C = images.shape
+    else:
+        raise ValueError(f"Expected 2D, 3D or 4D array, got {images.ndim}D")
     
-    num_patches_h = H // ph
-    num_patches_w = W // pw
-    patch_dim = ph * pw
+    # Pad to make divisible by patch size
+    H_padded = ((H + ph - 1) // ph) * ph
+    W_padded = ((W + pw - 1) // pw) * pw
+    
+    if H != H_padded or W != W_padded:
+        print(f"   Padding from ({H}, {W}) to ({H_padded}, {W_padded})")
+        if images.ndim == 3:
+            images_padded = np.zeros((images.shape[0], H_padded, W_padded), dtype=images.dtype)
+            images_padded[:, :H, :W] = images
+        elif images.ndim == 4:
+            images_padded = np.zeros((images.shape[0], H_padded, W_padded, images.shape[3]), dtype=images.dtype)
+            images_padded[:, :H, :W, :] = images
+        images = images_padded
+    
+    # Extract patches
+    if images.ndim == 3:
+        patches = rearrange(
+            images,
+            'n (nh ph) (nw pw) -> (n nh nw) (ph pw)',
+            ph=ph, pw=pw
+        )
+    elif images.ndim == 4:
+        patches = rearrange(
+            images,
+            'n (nh ph) (nw pw) c -> (n nh nw) (ph pw c)',
+            ph=ph, pw=pw
+        )
+    
+    num_patches_h = H_padded // ph
+    num_patches_w = W_padded // pw
+    patch_dim = patches.shape[1]
     
     return patches, (num_patches_h, num_patches_w, patch_dim)
 
 
-def load_training_data(data_dir, normalize=True):
-    """Load spectrograms from processed data directory.
+def load_training_data(data_dir, normalize=True, activation_layer='conv2'):
+    """Load intermediate activations from processed data directory.
     
     Args:
         data_dir: Path to data/processed/ directory
         normalize: Whether to normalize to [0, 1]
+        activation_layer: Which activation layer to load (default: 'conv2')
     
     Returns:
-        images: (N, H, W) array
+        images: (N, H, W) or (N, H, W, C) array of activations
     """
-    print(f"📂 Loading spectrograms from {data_dir}")
-    images = np.load(os.path.join(data_dir, "X_spectrograms.npy"))
+    print(f"📂 Loading intermediate activations from {data_dir}")
+    activations_path = os.path.join(data_dir, f"intermediate_activations_{activation_layer}.npy")
+    images = np.load(activations_path)
     
-    # Remove singleton dimension if present
-    images = np.squeeze(images, axis=-1) if images.ndim == 4 else images
+    print(f"   Original shape: {images.shape}")
+    
+    # Remove singleton dimension if present (but preserve channel dim if it exists)
+    if images.ndim == 4 and images.shape[-1] == 1:
+        images = np.squeeze(images, axis=-1)
+    
+    # If 2D, add batch dimension
+    if images.ndim == 2:
+        images = images[np.newaxis, :, :]
+        print(f"   Added batch dimension for 2D data")
     
     if normalize:
         min_val = np.min(images)
@@ -140,7 +196,7 @@ def load_training_data(data_dir, normalize=True):
         images = (images - min_val) / (max_val - min_val + 1e-7)
         print(f"   ✓ Normalized to [0, 1]")
     
-    print(f"   Shape: {images.shape}")
+    print(f"   Final shape: {images.shape}")
     return images
 
 
@@ -225,7 +281,7 @@ def main(args):
     
     # Load spectrograms
     data_dir = os.path.join(DATA_DIR, "processed")
-    images = load_training_data(data_dir, normalize=True)
+    images = load_training_data(data_dir, normalize=True, activation_layer=args.activation_layer)
     
     # Extract patches
     print(f"\n📐 Extracting patches with size {args.patch_size}x{args.patch_size}")
@@ -260,14 +316,14 @@ def main(args):
     # Initialize SAE
     print(f"\n🏗️  Initializing topK SAE")
     sae = TopKSAE(
-        input_dim=patch_dim,
-        hidden_dim=args.hidden_dim,
-        k_percent=args.k_percent,
+        input_shape=patch_dim,
+        nb_concepts=args.nb_concepts,
+        top_k=args.top_k,
         device=device
     )
-    print(f"   ✓ Input dim: {patch_dim}")
-    print(f"   ✓ Hidden dim: {args.hidden_dim}")
-    print(f"   ✓ Sparsity (k): {args.k_percent}%")
+    print(f"   ✓ Input shape: {patch_dim}")
+    print(f"   ✓ Nb concepts: {args.nb_concepts}")
+    print(f"   ✓ Top-k: {args.top_k if args.top_k else 'All'}")
     
     # Train SAE
     print(f"\n🎓 Training for {args.epochs} epochs")
@@ -283,9 +339,9 @@ def main(args):
     # Save model
     print(f"\n💾 Saving model")
     config = {
-        "input_dim": patch_dim,
-        "hidden_dim": args.hidden_dim,
-        "k_percent": args.k_percent,
+        "input_shape": patch_dim,
+        "nb_concepts": args.nb_concepts,
+        "top_k": args.top_k,
         "patch_size": args.patch_size,
         "num_patches_h": num_patches_h,
         "num_patches_w": num_patches_w,
@@ -320,12 +376,12 @@ if __name__ == '__main__':
         help='Patch size for spectrogram (default: 32)'
     )
     parser.add_argument(
-        '--hidden_dim', type=int, default=256,
-        help='Hidden (expansion) dimension for SAE (default: 256)'
+        '--nb_concepts', type=int, default=128,
+        help='Number of concepts (expansion dimension) for SAE (default: 128)'
     )
     parser.add_argument(
-        '--k_percent', type=float, default=5,
-        help='Sparsity: percentage of hidden units to activate (default: 5)'
+        '--top_k', type=int, default=32,
+        help='Number of top-k activations to keep. If None, keeps all (default: 32)'
     )
     parser.add_argument(
         '--epochs', type=int, default=50,
@@ -342,6 +398,10 @@ if __name__ == '__main__':
     parser.add_argument(
         '--use_cuda', action='store_true',
         help='Use CUDA if available (default: CPU only)'
+    )
+    parser.add_argument(
+        '--activation_layer', type=str, default='conv2',
+        help='Which activation layer to train on (default: conv2)'
     )
     
     args = parser.parse_args()

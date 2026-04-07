@@ -40,16 +40,16 @@ class SAEFeatureExtractor:
             self.config = json.load(f)
         
         print(f"📋 SAE Config loaded:")
-        print(f"   Input dim: {self.config['input_dim']}")
-        print(f"   Hidden dim: {self.config['hidden_dim']}")
-        print(f"   Sparsity (k): {self.config['k_percent']}%")
+        print(f"   Input shape: {self.config['input_shape']}")
+        print(f"   Nb concepts: {self.config['nb_concepts']}")
+        print(f"   Top-k: {self.config['top_k'] if self.config['top_k'] else 'All'}")
         print(f"   Patch size: {self.config['patch_size']}")
         
         # Initialize SAE model
         self.sae = TopKSAE(
-            input_dim=self.config['input_dim'],
-            hidden_dim=self.config['hidden_dim'],
-            k_percent=self.config['k_percent'],
+            input_shape=self.config['input_shape'],
+            nb_concepts=self.config['nb_concepts'],
+            top_k=self.config['top_k'],
             device=device
         )
         
@@ -201,7 +201,7 @@ class IntegratedSAECNN(nn.Module):
         
         # Code projection layer: from SAE codes to features
         num_codes = (128 // sae_extractor.config['patch_size']) ** 2
-        code_dim = sae_extractor.config['hidden_dim']
+        code_dim = sae_extractor.config['nb_concepts']
         
         self.code_projection = nn.Sequential(
             nn.Linear(code_dim, code_projection_dim),
@@ -342,25 +342,25 @@ if __name__ == '__main__':
         print(f"   CNN not found at {cnn_path}")
     
     # 3. Example: Enhance a single spectrogram
-    print(f"\n📐 Example: Enhancing a single spectrogram...")
+    print(f"\n📐 Example: Enhancing a single activation...")
     data_dir = os.path.join(DATA_DIR, "processed")
-    all_specs = np.load(os.path.join(data_dir, "X_spectrograms.npy"))
+    all_activations = np.load(os.path.join(data_dir, "intermediate_activations_conv2.npy"))
     
-    if all_specs.ndim == 4:
-        all_specs = np.squeeze(all_specs, axis=-1)
+    if all_activations.ndim == 4 and all_activations.shape[-1] == 1:
+        all_activations = np.squeeze(all_activations, axis=-1)
     
-    test_spec = all_specs[0]
+    test_activation = all_activations[0]
     
     # Normalize
-    test_spec_norm = (test_spec - test_spec.min()) / (test_spec.max() - test_spec.min() + 1e-7)
+    test_activation_norm = (test_activation - test_activation.min()) / (test_activation.max() - test_activation.min() + 1e-7)
     
     # Enhance
-    enhanced_spec = sae_extractor.extract_and_enhance_spectrogram(test_spec_norm)
+    enhanced_activation = sae_extractor.extract_and_enhance_spectrogram(test_activation_norm)
     
-    print(f"   Original shape: {test_spec_norm.shape}")
-    print(f"   Enhanced shape: {enhanced_spec.shape}")
-    print(f"   Original range: [{test_spec_norm.min():.4f}, {test_spec_norm.max():.4f}]")
-    print(f"   Enhanced range: [{enhanced_spec.min():.4f}, {enhanced_spec.max():.4f}]")
+    print(f"   Original shape: {test_activation_norm.shape}")
+    print(f"   Enhanced shape: {enhanced_activation.shape}")
+    print(f"   Original range: [{test_activation_norm.min():.4f}, {test_activation_norm.max():.4f}]")
+    print(f"   Enhanced range: [{enhanced_activation.min():.4f}, {enhanced_activation.max():.4f}]")
     
     print("\n" + "=" * 70)
     print("✅ Integration setup complete!")
