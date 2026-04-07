@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple, List
 import warnings
+import time
 
 # Try to import codec libraries, fall back gracefully
 try:
@@ -72,55 +73,85 @@ class MetaEnCodecWrapper(BaseCodec):
         if not ENCODEC_AVAILABLE:
             raise ImportError("encodec not installed. Install with: pip install encodec")
         
+        print(f"[EnCodec INIT] Starting initialization...")
+        t_init = time.time()
+        
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[EnCodec INIT] Device: {self.device}")
         
         # Load pre-trained EnCodec model
         # Note: EnCodec works best at 24kHz
         self.sr_encodec = 24000
+        t_load = time.time()
         self.model = EncodecModel.encodec_model_24khz().to(self.device)
+        print(f"[EnCodec INIT] Model loaded in {time.time() - t_load:.4f}s")
         self.model.eval()
+        print(f"[EnCodec INIT] Complete in {time.time() - t_init:.4f}s")
     
     def encode(self, audio: np.ndarray) -> list:
         """Encode audio to EncodedFrame objects."""
+        t_start = time.time()
         with torch.no_grad():
             # Resample if needed
+            t_resample = time.time()
             if self.sr != self.sr_encodec:
                 audio_resampled = librosa.resample(
                     audio, orig_sr=self.sr, target_sr=self.sr_encodec
                 )
+                print(f"  [EnCodec RESAMPLE] {time.time() - t_resample:.4f}s (from {self.sr}Hz to {self.sr_encodec}Hz)")
             else:
                 audio_resampled = audio
+                print(f"  [EnCodec RESAMPLE] skipped (already {self.sr_encodec}Hz)")
             
             # Convert to tensor and normalize
+            t_tensor = time.time()
             audio_tensor = torch.from_numpy(audio_resampled).float().unsqueeze(0).unsqueeze(0)
             audio_tensor = audio_tensor.to(self.device)
+            print(f"  [EnCodec TO_TENSOR] {time.time() - t_tensor:.4f}s")
             
             # Encode - returns list of EncodedFrame objects
+            t_encode = time.time()
             encoded_frames = self.model.encode(audio_tensor)
+            print(f"  [EnCodec ENCODE] {time.time() - t_encode:.4f}s (frames: {len(encoded_frames)})")
             
+        print(f"  [EnCodec ENCODE TOTAL] {time.time() - t_start:.4f}s")
         return encoded_frames
     
     def decode(self, encoded_frames: list) -> np.ndarray:
+        t_start = time.time()
         with torch.no_grad():
             # Decode - takes list of EncodedFrame objects
+            t_decode = time.time()
             decoded = self.model.decode(encoded_frames)
+            print(f"  [EnCodec DECODE] {time.time() - t_decode:.4f}s")
             
             # Convert back to numpy and resample if needed
+            t_numpy = time.time()
             decoded_np = decoded.squeeze().cpu().numpy()
+            print(f"  [EnCodec TO_NUMPY] {time.time() - t_numpy:.4f}s")
             
+            t_resample = time.time()
             if self.sr != self.sr_encodec:
                 decoded_np = librosa.resample(
                     decoded_np, orig_sr=self.sr_encodec, target_sr=self.sr
                 )
+                print(f"  [EnCodec DECODE_RESAMPLE] {time.time() - t_resample:.4f}s")
+            else:
+                print(f"  [EnCodec DECODE_RESAMPLE] skipped")
         
+        print(f"  [EnCodec DECODE TOTAL] {time.time() - t_start:.4f}s")
         return decoded_np
     
     def process_audio(self, audio: np.ndarray) -> np.ndarray:
         """Full encode-decode cycle."""
+        print(f"[EnCodec] Processing audio: len={len(audio)}, sr={self.sr}Hz, bandwidth={self.bandwidth}kbps")
+        t_total = time.time()
         encoded_frames = self.encode(audio)
         decoded = self.decode(encoded_frames)
         # Ensure output length matches input
-        return decoded[:len(audio)]
+        result = decoded[:len(audio)]
+        print(f"[EnCodec] Process complete in {time.time() - t_total:.4f}s")
+        return result
 
 
 class DACWrapper(BaseCodec):
@@ -140,54 +171,88 @@ class DACWrapper(BaseCodec):
         if not DAC_AVAILABLE:
             raise ImportError("dac not installed. Install with: pip install descript-audio-codec")
         
+        print(f"[DAC INIT] Starting initialization with model={model_name}...")
+        t_init = time.time()
+        
         self.sr_dac = 44100 if "44" in model_name else 16000
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[DAC INIT] Device: {self.device}, sr_dac={self.sr_dac}Hz")
         
         # Initialize DAC model with default architecture
         # (Pre-trained weights would be loaded via DAC.load() if a path is provided)
+        t_load = time.time()
         self.model = DAC(sample_rate=self.sr_dac).to(self.device)
+        print(f"[DAC INIT] Model loaded in {time.time() - t_load:.4f}s")
         self.model.eval()
+        print(f"[DAC INIT] Complete in {time.time() - t_init:.4f}s")
     
     def encode(self, audio: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
         """Encode audio through DAC."""
+        t_start = time.time()
         with torch.no_grad():
             # Resample if needed
+            t_resample = time.time()
             if self.sr != self.sr_dac:
                 audio_resampled = librosa.resample(
                     audio, orig_sr=self.sr, target_sr=self.sr_dac
                 )
+                print(f"  [DAC RESAMPLE] {time.time() - t_resample:.4f}s (from {self.sr}Hz to {self.sr_dac}Hz)")
             else:
                 audio_resampled = audio
+                print(f"  [DAC RESAMPLE] skipped (already {self.sr_dac}Hz)")
             
             # Convert to tensor
+            t_tensor = time.time()
             audio_tensor = torch.from_numpy(audio_resampled).float().unsqueeze(0).unsqueeze(0)
             audio_tensor = audio_tensor.to(self.device)
+            print(f"  [DAC TO_TENSOR] {time.time() - t_tensor:.4f}s")
             
             # Encode
+            t_encode = time.time()
             code = self.model.encode(audio_tensor)[0]
+            print(f"  [DAC ENCODE] {time.time() - t_encode:.4f}s (code shape: {code.shape})")
             
+        print(f"  [DAC ENCODE TOTAL] {time.time() - t_start:.4f}s")
         return code
     
     def decode(self, code: torch.Tensor) -> np.ndarray:
         """Decode from DAC codes."""
+        t_start = time.time()
         with torch.no_grad():
+            t_device = time.time()
             code = code.to(self.device)
+            print(f"  [DAC TO_DEVICE] {time.time() - t_device:.4f}s")
+            
+            t_decode = time.time()
             decoded = self.model.decode(code)
+            print(f"  [DAC DECODE] {time.time() - t_decode:.4f}s")
+            
+            t_numpy = time.time()
             decoded_np = decoded.squeeze().cpu().numpy()
+            print(f"  [DAC TO_NUMPY] {time.time() - t_numpy:.4f}s")
             
             # Resample if needed
+            t_resample = time.time()
             if self.sr != self.sr_dac:
                 decoded_np = librosa.resample(
                     decoded_np, orig_sr=self.sr_dac, target_sr=self.sr
                 )
+                print(f"  [DAC DECODE_RESAMPLE] {time.time() - t_resample:.4f}s")
+            else:
+                print(f"  [DAC DECODE_RESAMPLE] skipped")
         
+        print(f"  [DAC DECODE TOTAL] {time.time() - t_start:.4f}s")
         return decoded_np
     
     def process_audio(self, audio: np.ndarray) -> np.ndarray:
         """Full encode-decode cycle."""
+        print(f"[DAC] Processing audio: len={len(audio)}, sr={self.sr}Hz, model={self.model_name}")
+        t_total = time.time()
         code = self.encode(audio)
         decoded = self.decode(code)
-        return decoded[:len(audio)]
+        result = decoded[:len(audio)]
+        print(f"[DAC] Process complete in {time.time() - t_total:.4f}s")
+        return result
 
 
 class AudioLMCodecWrapper(BaseCodec):
@@ -391,9 +456,12 @@ class NeuralCodecConfounder:
             init_only: If specified, only initialize this codec (or all for 'random').
                        None initializes all available codecs.
         """
+        print(f"[NeuralCodecConfounder INIT] Starting initialization...")
+        t_init = time.time()
         self.sr = sr
         self.codecs = {}
         self._initialize_available_codecs(init_only=init_only)
+        print(f"[NeuralCodecConfounder INIT] Complete in {time.time() - t_init:.4f}s")
     
     def _initialize_available_codecs(self, init_only: Optional[str] = None):
         """Initialize only available codecs.
@@ -470,8 +538,11 @@ class NeuralCodecConfounder:
             return None
         
         try:
+            print(f"[NeuralCodecConfounder] Applying codec '{codec_name}' to audio len={len(audio)}")
+            t_start = time.time()
             codec = self.codecs[codec_name]
             processed = codec.process_audio(audio)
+            print(f"[NeuralCodecConfounder] Codec '{codec_name}' complete in {time.time() - t_start:.4f}s")
             return processed
         except Exception as e:
             warnings.warn(f"Error applying codec '{codec_name}': {e}")

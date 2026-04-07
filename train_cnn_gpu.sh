@@ -178,8 +178,8 @@ python3 "$PROJECT_ROOT/scripts/train_cnn.py" \
     --val_split "$VAL_SPLIT" \
     --segment_duration "$SEGMENT_DURATION" \
     --n_mels "$N_MELS" \
-    --codec random \
-    --num_workers 4 \
+    --codec encodec_meta \
+    --num_workers 1 \
     2>&1 | tee "$LOG_FILE"
 
 EXIT_CODE=$?

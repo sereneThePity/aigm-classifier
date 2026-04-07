@@ -92,7 +92,7 @@ if __name__ == '__main__':
     parser.add_argument('--val_split', type=float, default=0.2, help='Validation set fraction')
     parser.add_argument('--segment_duration', type=float, default=5.0, help='Audio segment duration in seconds')
     parser.add_argument('--n_mels', type=int, default=128, help='Number of mel frequency bins')
-    parser.add_argument('--num_workers', type=int, default=12, help='Number of workers for multiprocessing (reduce to 2-4 when using codecs)')
+    parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for multiprocessing (reduce to 2-4 when using codecs)')
     parser.add_argument('--codec', nargs='?', const='random', default=None, 
                         help='Apply neural codec to audio during training. Use "random" (default) to pick random codec per sample, or specify a codec name (e.g., encodec_meta, dac)')
     args = parser.parse_args()
