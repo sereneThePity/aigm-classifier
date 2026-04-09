@@ -1,7 +1,8 @@
 # Ignore large data and model artifacts
 data/
+logs/
 results/
-models/*.h5
+models/
 models/checkpoints/
 *.zip
 *.mp3

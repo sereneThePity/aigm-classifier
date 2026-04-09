@@ -93,8 +93,10 @@ if __name__ == '__main__':
     parser.add_argument('--segment_duration', type=float, default=5.0, help='Audio segment duration in seconds')
     parser.add_argument('--n_mels', type=int, default=128, help='Number of mel frequency bins')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for multiprocessing (reduce to 2-4 when using codecs)')
+    parser.add_argument('--device_type', choices=['cpu', 'gpu', 'both'], default='gpu', 
+                        help='Device type: "cpu" uses griffinmel/audiolm/valle, "gpu" uses encodec_meta/dac, "both" uses all available codecs')
     parser.add_argument('--codec', nargs='?', const='random', default=None, 
-                        help='Apply neural codec to audio during training. Use "random" (default) to pick random codec per sample, or specify a codec name (e.g., encodec_meta, dac)')
+                        help='Apply neural codec to audio during training. Use "random" (default) to pick random codec per sample, or specify a codec name. Available on CPU: griffinmel, audiolm, valle. Available on GPU: encodec_meta, dac')
     args = parser.parse_args()
     
     print("=" * 70)
@@ -108,32 +110,30 @@ if __name__ == '__main__':
         exit(1)
     
     # Load preprocessed dataset
-    print(f"\n📂 Loading data from: {args.manifest}")
-    print(f"   Segment duration: {args.segment_duration}s")
-    print(f"   Mel frequency bins: {args.n_mels}")
+    print(f"\n📂 Loading dataset...")
     
     # Setup codec augmentation if requested
     codec_name = None
     if args.codec:
-        print(f"\n🔧 Codec Augmentation Setup:")
-        available_codecs = get_available_codecs()
+        # Get available codecs based on device_type
+        if args.device_type == 'both':
+            gpu_codecs = get_available_codecs(device_type='gpu')
+            cpu_codecs = get_available_codecs(device_type='cpu')
+            available_codecs = list(set(gpu_codecs + cpu_codecs))  # Combine and remove duplicates
+        else:
+            available_codecs = get_available_codecs(device_type=args.device_type)
+        
         if available_codecs:
             # Validate codec_name if it's not 'random'
             if args.codec != 'random' and args.codec not in available_codecs:
-                print(f"   ⚠️  Codec '{args.codec}' not available. Available: {', '.join(available_codecs)}")
-                print(f"   Defaulting to random codec selection")
+                print(f"   ⚠️  Codec '{args.codec}' not available. Available: {', '.join(sorted(available_codecs))}")
                 codec_name = 'random'
             else:
                 codec_name = args.codec
-                codec_type = "random codec per sample" if codec_name == 'random' else f"'{codec_name}' codec"
-                print(f"   ✓ Codec augmentation: ENABLED ({codec_type})")
-                print(f"   ✓ Available codecs: {', '.join(available_codecs)}")
         else:
-            print(f"   ⚠️  Neural codec augmentation requested but no codecs available")
+            print(f"   ⚠️  No codecs available for {args.device_type}")
             codec_name = None
     
-    print(f"\n📊 Loading dataset with codec: {codec_name if codec_name else 'None (no augmentation)'}")
-    print(f"   Workers: {args.num_workers}")
     X, y = load_dataset_comprehensive(
         args.manifest,
         n_mels=args.n_mels,
@@ -142,20 +142,17 @@ if __name__ == '__main__':
         target_loudness=-20.0,
         hp_freq=20,
         num_workers=args.num_workers,
-        codec_name=codec_name
+        codec_name=codec_name,
+        device_type=args.device_type
     )
+    
     
     # Compute input shape from loaded data
     input_shape = X.shape[1:3]  # (freq_bins, time_steps)
     unique_labels = np.unique(y)
     num_classes = len(unique_labels)
     
-    print(f"\n✅ Dataset loaded successfully")
-    print(f"   Input shape: {input_shape}")
-    print(f"   Unique labels: {unique_labels}")
-    print(f"   Label counts: {np.bincount(y.astype(int))}")
-    print(f"   Number of classes: {num_classes}")
-    print(f"   Total samples: {len(X)}")
+    print(f"✅ Dataset loaded: {X.shape}")
     
     # Split into train, val, and test sets
     X_train, X_test, y_train, y_test = train_test_split(
@@ -166,20 +163,15 @@ if __name__ == '__main__':
         X_train, y_train, test_size=args.val_split, random_state=42, stratify=y_train
     )
     
-    print(f"\n📊 Data split:")
-    print(f"   Train: {len(X_train)} samples")
-    print(f"   Val:   {len(X_val)} samples")
-    print(f"   Test:  {len(X_test)} samples")
+    print(f"📊 Split: train={len(X_train)}, val={len(X_val)}, test={len(X_test)}")
     
     # Build model
-    print(f"\n🏗️ Building CNN model...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"   Using device: {device}")
     model = build_simple_cnn(input_shape, num_classes)
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
-    print(f"   Model created with {sum(p.numel() for p in model.parameters())} parameters")
+    print(f"🏗️ Model built ({sum(p.numel() for p in model.parameters()):,} params, device={device})")
     
     # Convert to tensors
     X_train_tensor = torch.from_numpy(X_train).float()
@@ -198,14 +190,8 @@ if __name__ == '__main__':
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
     
-    print(f"   Train batches: {len(train_loader)}")
-    print(f"   Val batches:   {len(val_loader)}")
-    print(f"   Test batches:  {len(test_loader)}")
-    
-    # Training loop
-    print(f"\n" + "=" * 70)
-    print(f"🚀 Starting Training (Epochs: {args.epochs}, LR: {args.lr})")
-    print("=" * 70)
+    print(f"\n🚀 Training ({args.epochs} epochs, LR={args.lr})")
+    print("="*50)
     
     best_val_loss = float('inf')
     patience = 3
@@ -269,9 +255,7 @@ if __name__ == '__main__':
                 break
     
     # Test phase
-    print(f"\n" + "=" * 70)
-    print(f"📈 Evaluating on Test Set")
-    print("=" * 70)
+    print(f"\n📈 Evaluating test set")
     
     model.eval()
     test_loss = 0.0
@@ -319,8 +303,4 @@ if __name__ == '__main__':
     with open(info_path, 'w') as f:
         json.dump(training_info, f, indent=2)
     
-    print(f"\n" + "=" * 70)
-    print(f"✅ Training completed!")
-    print(f"   Model saved to: {model_path}")
-    print(f"   Info saved to: {info_path}")
-    print("=" * 70)
+    print(f"✅ Training complete! Model: {model_path}")

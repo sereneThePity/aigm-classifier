@@ -73,84 +73,55 @@ class MetaEnCodecWrapper(BaseCodec):
         if not ENCODEC_AVAILABLE:
             raise ImportError("encodec not installed. Install with: pip install encodec")
         
-        print(f"[EnCodec INIT] Starting initialization...")
-        t_init = time.time()
-        
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"[EnCodec INIT] Device: {self.device}")
         
         # Load pre-trained EnCodec model
         # Note: EnCodec works best at 24kHz
         self.sr_encodec = 24000
-        t_load = time.time()
         self.model = EncodecModel.encodec_model_24khz().to(self.device)
-        print(f"[EnCodec INIT] Model loaded in {time.time() - t_load:.4f}s")
         self.model.eval()
-        print(f"[EnCodec INIT] Complete in {time.time() - t_init:.4f}s")
     
     def encode(self, audio: np.ndarray) -> list:
         """Encode audio to EncodedFrame objects."""
-        t_start = time.time()
         with torch.no_grad():
             # Resample if needed
-            t_resample = time.time()
             if self.sr != self.sr_encodec:
                 audio_resampled = librosa.resample(
                     audio, orig_sr=self.sr, target_sr=self.sr_encodec
                 )
-                print(f"  [EnCodec RESAMPLE] {time.time() - t_resample:.4f}s (from {self.sr}Hz to {self.sr_encodec}Hz)")
             else:
                 audio_resampled = audio
-                print(f"  [EnCodec RESAMPLE] skipped (already {self.sr_encodec}Hz)")
             
             # Convert to tensor and normalize
-            t_tensor = time.time()
             audio_tensor = torch.from_numpy(audio_resampled).float().unsqueeze(0).unsqueeze(0)
             audio_tensor = audio_tensor.to(self.device)
-            print(f"  [EnCodec TO_TENSOR] {time.time() - t_tensor:.4f}s")
             
             # Encode - returns list of EncodedFrame objects
-            t_encode = time.time()
             encoded_frames = self.model.encode(audio_tensor)
-            print(f"  [EnCodec ENCODE] {time.time() - t_encode:.4f}s (frames: {len(encoded_frames)})")
             
-        print(f"  [EnCodec ENCODE TOTAL] {time.time() - t_start:.4f}s")
         return encoded_frames
     
     def decode(self, encoded_frames: list) -> np.ndarray:
-        t_start = time.time()
         with torch.no_grad():
             # Decode - takes list of EncodedFrame objects
-            t_decode = time.time()
             decoded = self.model.decode(encoded_frames)
-            print(f"  [EnCodec DECODE] {time.time() - t_decode:.4f}s")
             
             # Convert back to numpy and resample if needed
-            t_numpy = time.time()
             decoded_np = decoded.squeeze().cpu().numpy()
-            print(f"  [EnCodec TO_NUMPY] {time.time() - t_numpy:.4f}s")
             
-            t_resample = time.time()
             if self.sr != self.sr_encodec:
                 decoded_np = librosa.resample(
                     decoded_np, orig_sr=self.sr_encodec, target_sr=self.sr
                 )
-                print(f"  [EnCodec DECODE_RESAMPLE] {time.time() - t_resample:.4f}s")
-            else:
-                print(f"  [EnCodec DECODE_RESAMPLE] skipped")
         
-        print(f"  [EnCodec DECODE TOTAL] {time.time() - t_start:.4f}s")
         return decoded_np
     
     def process_audio(self, audio: np.ndarray) -> np.ndarray:
         """Full encode-decode cycle."""
-        print(f"[EnCodec] Processing audio: len={len(audio)}, sr={self.sr}Hz, bandwidth={self.bandwidth}kbps")
-        t_total = time.time()
         encoded_frames = self.encode(audio)
         decoded = self.decode(encoded_frames)
         # Ensure output length matches input
         result = decoded[:len(audio)]
-        print(f"[EnCodec] Process complete in {time.time() - t_total:.4f}s")
         return result
 
 
@@ -171,20 +142,13 @@ class DACWrapper(BaseCodec):
         if not DAC_AVAILABLE:
             raise ImportError("dac not installed. Install with: pip install descript-audio-codec")
         
-        print(f"[DAC INIT] Starting initialization with model={model_name}...")
-        t_init = time.time()
-        
         self.sr_dac = 44100 if "44" in model_name else 16000
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"[DAC INIT] Device: {self.device}, sr_dac={self.sr_dac}Hz")
         
         # Initialize DAC model with default architecture
         # (Pre-trained weights would be loaded via DAC.load() if a path is provided)
-        t_load = time.time()
         self.model = DAC(sample_rate=self.sr_dac).to(self.device)
-        print(f"[DAC INIT] Model loaded in {time.time() - t_load:.4f}s")
         self.model.eval()
-        print(f"[DAC INIT] Complete in {time.time() - t_init:.4f}s")
     
     def encode(self, audio: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
         """Encode audio through DAC."""
@@ -246,12 +210,9 @@ class DACWrapper(BaseCodec):
     
     def process_audio(self, audio: np.ndarray) -> np.ndarray:
         """Full encode-decode cycle."""
-        print(f"[DAC] Processing audio: len={len(audio)}, sr={self.sr}Hz, model={self.model_name}")
-        t_total = time.time()
         code = self.encode(audio)
         decoded = self.decode(code)
         result = decoded[:len(audio)]
-        print(f"[DAC] Process complete in {time.time() - t_total:.4f}s")
         return result
 
 
@@ -447,34 +408,41 @@ class NeuralCodecConfounder:
     Manages application of neural codec confounders to audio files.
     """
     
-    def __init__(self, sr: int = 44100, init_only: Optional[str] = None):
+    def __init__(self, sr: int = 44100, init_only: Optional[str] = None, device_type: str = 'gpu'):
         """
         Initialize confounder manager.
         
         Args:
             sr: Sample rate for all codecs
             init_only: If specified, only initialize this codec (or all for 'random').
-                       None initializes all available codecs.
+                       None initializes all available codecs filtered by device_type.
+            device_type: 'cpu' initializes only CPU-friendly codecs (griffinmel, audiolm, valle)
+                        'gpu' initializes all available codecs including GPU ones (encodec_meta, dac)
         """
-        print(f"[NeuralCodecConfounder INIT] Starting initialization...")
-        t_init = time.time()
         self.sr = sr
+        self.device_type = device_type
         self.codecs = {}
-        self._initialize_available_codecs(init_only=init_only)
-        print(f"[NeuralCodecConfounder INIT] Complete in {time.time() - t_init:.4f}s")
+        self._initialize_available_codecs(init_only=init_only, device_type=device_type)
     
-    def _initialize_available_codecs(self, init_only: Optional[str] = None):
-        """Initialize only available codecs.
+    def _initialize_available_codecs(self, init_only: Optional[str] = None, device_type: str = 'gpu'):
+        """Initialize only available codecs filtered by device type.
         
         Args:
             init_only: If specified, only initialize this codec.
-                       Use 'random' or None to initialize all.
+                       Use 'random' or None to initialize based on device_type.
+            device_type: 'cpu' for CPU-only codecs, 'gpu' for all codecs
         """
         # Map of codec names to lightweight (librosa-based) constructors
         lightweight = {
             "griffinmel": lambda: GriffinMelCodec(sr=self.sr),
             "audiolm": lambda: AudioLMCodecWrapper(sr=self.sr),
             "valle": lambda: VALLECodecWrapper(sr=self.sr),
+        }
+        
+        # GPU-heavy codecs
+        gpu_only = {
+            "encodec_meta": lambda: MetaEnCodecWrapper(sr=self.sr),
+            "dac": lambda: self._init_dac(),
         }
         
         # If a specific non-random codec is requested, only init that one
@@ -490,8 +458,7 @@ class NeuralCodecConfounder:
                 return
             elif init_only == 'dac' and DAC_AVAILABLE:
                 try:
-                    model_name = "44khz" if self.sr == 44100 else "16khz"
-                    self.codecs['dac'] = DACWrapper(sr=self.sr, model_name=model_name)
+                    self.codecs['dac'] = self._init_dac()
                 except Exception as e:
                     warnings.warn(f"Failed to load DAC: {e}")
                 return
@@ -499,24 +466,31 @@ class NeuralCodecConfounder:
                 warnings.warn(f"Codec '{init_only}' not available.")
                 return
         
-        # Otherwise init all available codecs
+        # Initialize based on device_type
+        # Always initialize lightweight codecs
         for name, factory in lightweight.items():
             self.codecs[name] = factory()
         
-        # Conditionally available
-        if ENCODEC_AVAILABLE:
-            try:
-                self.codecs["encodec_meta"] = MetaEnCodecWrapper(sr=self.sr)
-            except Exception as e:
-                warnings.warn(f"Failed to load EnCodec: {e}")
-        
-        if DAC_AVAILABLE:
-            try:
-                if self.sr in [16000, 44100]:
-                    model_name = "44khz" if self.sr == 44100 else "16khz"
-                    self.codecs["dac"] = DACWrapper(sr=self.sr, model_name=model_name)
-            except Exception as e:
-                warnings.warn(f"Failed to load DAC: {e}")
+        # Only initialize GPU-heavy codecs if device_type is 'gpu'
+        if device_type == 'gpu':
+            if ENCODEC_AVAILABLE:
+                try:
+                    self.codecs["encodec_meta"] = MetaEnCodecWrapper(sr=self.sr)
+                except Exception as e:
+                    warnings.warn(f"Failed to load EnCodec: {e}")
+            
+            if DAC_AVAILABLE:
+                try:
+                    self.codecs["dac"] = self._init_dac()
+                except Exception as e:
+                    warnings.warn(f"Failed to load DAC: {e}")
+    
+    def _init_dac(self):
+        """Helper to initialize DAC codec."""
+        if self.sr in [16000, 44100]:
+            model_name = "44khz" if self.sr == 44100 else "16khz"
+            return DACWrapper(sr=self.sr, model_name=model_name)
+        raise ValueError(f"DAC doesn't support sample rate {self.sr}")
     
     def get_available_codecs(self) -> List[str]:
         """Return list of available codecs."""
@@ -538,11 +512,8 @@ class NeuralCodecConfounder:
             return None
         
         try:
-            print(f"[NeuralCodecConfounder] Applying codec '{codec_name}' to audio len={len(audio)}")
-            t_start = time.time()
             codec = self.codecs[codec_name]
             processed = codec.process_audio(audio)
-            print(f"[NeuralCodecConfounder] Codec '{codec_name}' complete in {time.time() - t_start:.4f}s")
             return processed
         except Exception as e:
             warnings.warn(f"Error applying codec '{codec_name}': {e}")
@@ -609,7 +580,15 @@ def apply_neural_codec(audio: np.ndarray, codec_name: str, sr: int = 44100) -> n
     return processed if processed is not None else audio
 
 
-def get_available_codecs(sr: int = 44100) -> List[str]:
-    """Get list of available codecs."""
-    confounder = NeuralCodecConfounder(sr=sr)
+def get_available_codecs(sr: int = 44100, device_type: str = 'gpu') -> List[str]:
+    """Get list of available codecs.
+    
+    Args:
+        sr: Sample rate for codecs
+        device_type: 'cpu' for CPU-only codecs, 'gpu' for all codecs
+    
+    Returns:
+        List of available codec names
+    """
+    confounder = NeuralCodecConfounder(sr=sr, device_type=device_type)
     return confounder.get_available_codecs()

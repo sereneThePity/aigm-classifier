@@ -1,11 +1,11 @@
 #!/bin/bash
 
 #SBATCH --job-name="CNN-Audio-Classifier"
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=40
-#SBATCH --gres=gpu:H100.80gb:1
+#SBATCH --cpus-per-task=20
+#SBATCH --gres=gpu:H100.80:1
 #SBATCH --mail-type=NONE
 #SBATCH --output=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.out
 #SBATCH --error=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.err
@@ -31,6 +31,9 @@ TEST_SPLIT=0.2
 VAL_SPLIT=0.1
 SEGMENT_DURATION=5.0
 N_MELS=128
+NUM_WORKERS=30
+DEVICE_TYPE="cpu"
+
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -61,6 +64,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --n_mels)
             N_MELS="$2"
+            shift 2
+            ;;
+        --device_type)
+            DEVICE_TYPE="$2"
             shift 2
             ;;
         *)
@@ -179,7 +186,8 @@ python3 "$PROJECT_ROOT/scripts/train_cnn.py" \
     --segment_duration "$SEGMENT_DURATION" \
     --n_mels "$N_MELS" \
     --codec encodec_meta \
-    --num_workers 1 \
+    --num_workers "$NUM_WORKERS" \
+    --device_type "$DEVICE_TYPE" \
     2>&1 | tee "$LOG_FILE"
 
 EXIT_CODE=$?
