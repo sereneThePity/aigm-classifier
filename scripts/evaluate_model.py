@@ -89,7 +89,7 @@ def evaluate(model_path, manifest_path, codec_name=None):
         preds_bin = (preds.flatten() > 0.5).astype(int)
     
     acc = np.mean(preds_bin == y)
-    print(f"✅ Accuracy: {acc*100:.2f}% on testset")
+    print(f"✅ Accuracy: {acc*100:.2f}% on trainset")
 
 def evaluate_with_transform(model_path, manifest_path, n_mels=128, target_shape=(128, 128), transform="random"):
     """

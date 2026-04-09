@@ -139,7 +139,7 @@ else:
 }
 
 # Verify manifest exists
-MANIFEST="$PROJECT_ROOT/data/testset/manifest.csv"
+MANIFEST="$PROJECT_ROOT/data/trainset/manifest.csv"
 if [ ! -f "$MANIFEST" ]; then
     echo -e "${RED}❌ Error: Manifest file not found at $MANIFEST${NC}"
     echo -e "${YELLOW}Please create it using: python3 build_manifest.py${NC}"

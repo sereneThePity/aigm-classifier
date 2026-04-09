@@ -152,60 +152,40 @@ class DACWrapper(BaseCodec):
     
     def encode(self, audio: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
         """Encode audio through DAC."""
-        t_start = time.time()
         with torch.no_grad():
             # Resample if needed
-            t_resample = time.time()
             if self.sr != self.sr_dac:
                 audio_resampled = librosa.resample(
                     audio, orig_sr=self.sr, target_sr=self.sr_dac
                 )
-                print(f"  [DAC RESAMPLE] {time.time() - t_resample:.4f}s (from {self.sr}Hz to {self.sr_dac}Hz)")
             else:
                 audio_resampled = audio
-                print(f"  [DAC RESAMPLE] skipped (already {self.sr_dac}Hz)")
             
             # Convert to tensor
-            t_tensor = time.time()
             audio_tensor = torch.from_numpy(audio_resampled).float().unsqueeze(0).unsqueeze(0)
             audio_tensor = audio_tensor.to(self.device)
-            print(f"  [DAC TO_TENSOR] {time.time() - t_tensor:.4f}s")
             
             # Encode
-            t_encode = time.time()
             code = self.model.encode(audio_tensor)[0]
-            print(f"  [DAC ENCODE] {time.time() - t_encode:.4f}s (code shape: {code.shape})")
             
-        print(f"  [DAC ENCODE TOTAL] {time.time() - t_start:.4f}s")
         return code
     
     def decode(self, code: torch.Tensor) -> np.ndarray:
         """Decode from DAC codes."""
         t_start = time.time()
         with torch.no_grad():
-            t_device = time.time()
             code = code.to(self.device)
-            print(f"  [DAC TO_DEVICE] {time.time() - t_device:.4f}s")
-            
-            t_decode = time.time()
             decoded = self.model.decode(code)
-            print(f"  [DAC DECODE] {time.time() - t_decode:.4f}s")
             
-            t_numpy = time.time()
             decoded_np = decoded.squeeze().cpu().numpy()
-            print(f"  [DAC TO_NUMPY] {time.time() - t_numpy:.4f}s")
             
             # Resample if needed
-            t_resample = time.time()
             if self.sr != self.sr_dac:
                 decoded_np = librosa.resample(
                     decoded_np, orig_sr=self.sr_dac, target_sr=self.sr
                 )
-                print(f"  [DAC DECODE_RESAMPLE] {time.time() - t_resample:.4f}s")
-            else:
-                print(f"  [DAC DECODE_RESAMPLE] skipped")
+
         
-        print(f"  [DAC DECODE TOTAL] {time.time() - t_start:.4f}s")
         return decoded_np
     
     def process_audio(self, audio: np.ndarray) -> np.ndarray:

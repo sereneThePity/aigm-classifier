@@ -101,8 +101,8 @@ def build_manifest(root_dir, output_csv, max_per_folder=50, sample_type="both", 
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", default=os.path.join(DATA_DIR, "testset"), help="Root folder to scan")
-    parser.add_argument("--out", default=os.path.join(DATA_DIR, "testset/manifest.csv"), help="Output CSV path")
+    parser.add_argument("--root", default=os.path.join(DATA_DIR, "trainset"), help="Root folder to scan")
+    parser.add_argument("--out", default=os.path.join(DATA_DIR, "trainset/manifest.csv"), help="Output CSV path")
     parser.add_argument("--max", type=int, default=50, help="Maximum files per top-level source")
     parser.add_argument("--type", choices=["real", "fake", "both"], default="both", help="Type of samples to include")
     parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers for metadata extraction")

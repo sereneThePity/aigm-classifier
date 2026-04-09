@@ -84,7 +84,7 @@ def build_simple_cnn(input_shape, num_classes):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train CNN classifier on preprocessed audio data")
-    parser.add_argument('--manifest', default=os.path.join(DATA_DIR, "testset/manifest.csv"), type=str, help='Path to manifest CSV file')
+    parser.add_argument('--manifest', default=os.path.join(DATA_DIR, "trainset/manifest.csv"), type=str, help='Path to manifest CSV file')
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
