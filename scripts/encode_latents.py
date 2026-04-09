@@ -68,7 +68,7 @@ def preprocess_audio(
         print(f"Error loading {file_path}: {e}")
         return None
 
-def encode_decode_and_save(audio_file, output_path, codec):
+def encode_decode_save(audio_file, output_path, codec):
     """Encode and decode audio through codec, save decoded audio."""
     try:
         # Preprocess
@@ -90,7 +90,7 @@ def encode_decode_and_save(audio_file, output_path, codec):
         print(f"Error processing {audio_file}: {e}")
         return False
 
-def assign_codecs_equally(df, codec_names):
+def assign_codecs(df, codec_names):
     """
     Assign codecs equally and randomly to files.
     
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     output_dir = Path(args.output_dir)
     
     # Assign codecs randomly and equally
-    codec_assignments = assign_codecs_equally(df, args.codecs)
+    codec_assignments = assign_codecs(df, args.codecs)
     df["assigned_codec"] = codec_assignments
     
     print(f"📊 Dataset split:")
@@ -155,6 +155,6 @@ if __name__ == "__main__":
             
             output_path = output_dir / codec_name / str(label) / f"{Path(file_path).stem}.npy"
             
-            success = encode_decode_and_save(file_path, output_path, codec)
+            success = encode_decode_save(file_path, output_path, codec)
     
     print("\n✅ Done!")

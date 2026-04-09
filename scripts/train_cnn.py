@@ -95,8 +95,12 @@ if __name__ == '__main__':
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for multiprocessing (reduce to 2-4 when using codecs)')
     parser.add_argument('--device_type', choices=['cpu', 'gpu', 'both'], default='gpu', 
                         help='Device type: "cpu" uses griffinmel/audiolm/valle, "gpu" uses encodec/dac, "both" uses all available codecs')
+    parser.add_argument('--latent_mode', choices=['cpu_codecs', 'precomputed'], default='cpu_codecs',
+                        help='Latent source mode: "cpu_codecs" applies CPU codecs during training (default), "precomputed" loads pre-encoded latents from disk')
+    parser.add_argument('--latent_dir', type=str, default=None, 
+                        help='Directory containing pre-computed latent files (.npy). Required if --latent_mode is "precomputed"')
     parser.add_argument('--codec', nargs='?', const='random', default=None, 
-                        help='Apply neural codec to audio during training. Use "random" (default) to pick random codec per sample, or specify a codec name. Available on CPU: griffinmel, audiolm, valle. Available on GPU: encodec, dac')
+                        help='Apply neural codec to audio during training (only used with --latent_mode cpu_codecs). Use "random" (default) to pick random codec per sample, or specify a codec name. Available on CPU: griffinmel, audiolm, valle. Available on GPU: encodec, dac')
     args = parser.parse_args()
     
     print("=" * 70)
@@ -111,10 +115,11 @@ if __name__ == '__main__':
     
     # Load preprocessed dataset
     print(f"\n📂 Loading dataset...")
+    print(f"   Latent mode: {args.latent_mode}")
     
-    # Setup codec augmentation if requested
+    # Setup codec augmentation if using CPU codecs mode
     codec_name = None
-    if args.codec:
+    if args.latent_mode == 'cpu_codecs' and args.codec:
         # Get available codecs based on device_type
         if args.device_type == 'both':
             gpu_codecs = get_available_codecs(device_type='gpu')
@@ -133,6 +138,11 @@ if __name__ == '__main__':
         else:
             print(f"   ⚠️  No codecs available for {args.device_type}")
             codec_name = None
+    elif args.latent_mode == 'precomputed':
+        print(f"   Using precomputed latents from: {args.latent_dir}")
+        if args.latent_dir is None or not os.path.exists(args.latent_dir):
+            print(f"❌ Latent directory not found: {args.latent_dir}")
+            exit(1)
     
     X, y = load_dataset_comprehensive(
         args.manifest,
@@ -143,7 +153,9 @@ if __name__ == '__main__':
         hp_freq=20,
         num_workers=args.num_workers,
         codec_name=codec_name,
-        device_type=args.device_type
+        device_type=args.device_type,
+        latent_mode=args.latent_mode,
+        latent_dir=args.latent_dir
     )
     
     
