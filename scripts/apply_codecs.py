@@ -7,7 +7,7 @@ compression artifacts and other codec-specific distortions to the audio.
 
 Usage:
     # Apply a specific codec to a directory
-    python apply_codecs.py --input-dir data/real_songs/ --codec encodec_meta --output-dir data/real_songs_encodec/
+    python apply_codecs.py --input-dir data/real_songs/ --codec encodec --output-dir data/real_songs_encodec/
     
     # Apply all available codecs
     python apply_codecs.py --input-dir data/real_songs/ --codec all --output-dir data/real_songs_all_codecs/
@@ -201,7 +201,7 @@ Examples:
   python apply_codecs.py --list-codecs
   
   # Apply a specific codec to a directory
-  python apply_codecs.py --input-dir data/real_songs/ --codec encodec_meta --output-dir data/codecs/encodec_meta/
+  python apply_codecs.py --input-dir data/real_songs/ --codec encodec --output-dir data/codecs/encodec/
   
   # Apply all available codecs
   python apply_codecs.py --input-dir data/real_songs/ --codec all --output-dir data/codecs/
@@ -240,7 +240,7 @@ Examples:
         print("📋 Available neural codec confounders:")
         print()
         codecs_info = {
-            "encodec_meta": "Meta's neural codec (24 kHz optimal)",
+            "encodec": "Meta's neural codec (24 kHz optimal)",
             "dac": "Descript Audio Codec (high quality)",
             "audiolm": "Google's AudioLM codec tokenizer",
             "valle": "Microsoft's VALL-E codec (hierarchical quantization)",

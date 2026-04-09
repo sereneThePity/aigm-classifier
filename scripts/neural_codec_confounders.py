@@ -375,7 +375,7 @@ class GriffinMelCodec(BaseCodec):
 
 # Registry of all codecs
 CODEC_REGISTRY = {
-    "encodec_meta": MetaEnCodecWrapper,
+    "encodec": MetaEnCodecWrapper,
     "dac": DACWrapper,
     "audiolm": AudioLMCodecWrapper,
     "valle": VALLECodecWrapper,
@@ -397,7 +397,7 @@ class NeuralCodecConfounder:
             init_only: If specified, only initialize this codec (or all for 'random').
                        None initializes all available codecs filtered by device_type.
             device_type: 'cpu' initializes only CPU-friendly codecs (griffinmel, audiolm, valle)
-                        'gpu' initializes all available codecs including GPU ones (encodec_meta, dac)
+                        'gpu' initializes all available codecs including GPU ones (encodec, dac)
         """
         self.sr = sr
         self.device_type = device_type
@@ -421,7 +421,7 @@ class NeuralCodecConfounder:
         
         # GPU-heavy codecs
         gpu_only = {
-            "encodec_meta": lambda: MetaEnCodecWrapper(sr=self.sr),
+            "encodec": lambda: MetaEnCodecWrapper(sr=self.sr),
             "dac": lambda: self._init_dac(),
         }
         
@@ -430,9 +430,9 @@ class NeuralCodecConfounder:
             if init_only in lightweight:
                 self.codecs[init_only] = lightweight[init_only]()
                 return
-            elif init_only == 'encodec_meta' and ENCODEC_AVAILABLE:
+            elif init_only == 'encodec' and ENCODEC_AVAILABLE:
                 try:
-                    self.codecs['encodec_meta'] = MetaEnCodecWrapper(sr=self.sr)
+                    self.codecs['encodec'] = MetaEnCodecWrapper(sr=self.sr)
                 except Exception as e:
                     warnings.warn(f"Failed to load EnCodec: {e}")
                 return
@@ -455,7 +455,7 @@ class NeuralCodecConfounder:
         if device_type == 'gpu':
             if ENCODEC_AVAILABLE:
                 try:
-                    self.codecs["encodec_meta"] = MetaEnCodecWrapper(sr=self.sr)
+                    self.codecs["encodec"] = MetaEnCodecWrapper(sr=self.sr)
                 except Exception as e:
                     warnings.warn(f"Failed to load EnCodec: {e}")
             

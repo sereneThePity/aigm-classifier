@@ -94,9 +94,9 @@ if __name__ == '__main__':
     parser.add_argument('--n_mels', type=int, default=128, help='Number of mel frequency bins')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for multiprocessing (reduce to 2-4 when using codecs)')
     parser.add_argument('--device_type', choices=['cpu', 'gpu', 'both'], default='gpu', 
-                        help='Device type: "cpu" uses griffinmel/audiolm/valle, "gpu" uses encodec_meta/dac, "both" uses all available codecs')
+                        help='Device type: "cpu" uses griffinmel/audiolm/valle, "gpu" uses encodec/dac, "both" uses all available codecs')
     parser.add_argument('--codec', nargs='?', const='random', default=None, 
-                        help='Apply neural codec to audio during training. Use "random" (default) to pick random codec per sample, or specify a codec name. Available on CPU: griffinmel, audiolm, valle. Available on GPU: encodec_meta, dac')
+                        help='Apply neural codec to audio during training. Use "random" (default) to pick random codec per sample, or specify a codec name. Available on CPU: griffinmel, audiolm, valle. Available on GPU: encodec, dac')
     args = parser.parse_args()
     
     print("=" * 70)

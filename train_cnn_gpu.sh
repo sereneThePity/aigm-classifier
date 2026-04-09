@@ -185,7 +185,7 @@ python3 "$PROJECT_ROOT/scripts/train_cnn.py" \
     --val_split "$VAL_SPLIT" \
     --segment_duration "$SEGMENT_DURATION" \
     --n_mels "$N_MELS" \
-    --codec encodec_meta \
+    --codec encodec \
     --num_workers "$NUM_WORKERS" \
     --device_type "$DEVICE_TYPE" \
     2>&1 | tee "$LOG_FILE"

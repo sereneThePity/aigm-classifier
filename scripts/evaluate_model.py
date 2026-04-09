@@ -225,7 +225,7 @@ if __name__ == "__main__":
     eval_parser = subparsers.add_parser('evaluate', help='Evaluate model without transforms')
     eval_parser.add_argument('--model_path', required=True, help='Path to the model')
     eval_parser.add_argument('--manifest_path', required=True, help='Path to the manifest CSV')
-    eval_parser.add_argument('--codec_name', default=None, help='Codec to apply (random, encodec_meta, dac, griffinmel, audiolm, valle)')
+    eval_parser.add_argument('--codec_name', default=None, help='Codec to apply (random, encodec, dac, griffinmel, audiolm, valle)')
 
     # Subparser for evaluate_with_transform
     eval_trans_parser = subparsers.add_parser('evaluate_transform', help='Evaluate model with transforms')
