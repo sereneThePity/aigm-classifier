@@ -32,7 +32,7 @@ VAL_SPLIT=0.1
 SEGMENT_DURATION=5.0
 N_MELS=128
 NUM_WORKERS=30
-DEVICE_TYPE="cpu"
+LATENT_MODE="random"
 
 
 # Parse command line arguments
@@ -66,8 +66,8 @@ while [[ $# -gt 0 ]]; do
             N_MELS="$2"
             shift 2
             ;;
-        --device_type)
-            DEVICE_TYPE="$2"
+        --latent_mode)
+            LATENT_MODE="$2"
             shift 2
             ;;
         *)
@@ -163,6 +163,7 @@ echo "    Test Split:        $TEST_SPLIT"
 echo "    Val Split:         $VAL_SPLIT"
 echo "    Segment Duration:  ${SEGMENT_DURATION}s"
 echo "    Mel Frequency Bins: $N_MELS"
+echo "    Latent Mode:       $LATENT_MODE"
 echo "    Manifest:          $MANIFEST"
 echo -e "    Log File:          $LOG_FILE"
 
@@ -185,9 +186,8 @@ python3 "$PROJECT_ROOT/scripts/train_cnn.py" \
     --val_split "$VAL_SPLIT" \
     --segment_duration "$SEGMENT_DURATION" \
     --n_mels "$N_MELS" \
-    --codec encodec \
-    --num_workers "$NUM_WORKERS" \
-    --device_type "$DEVICE_TYPE" \
+    --latent_mode "$LATENT_MODE" \
+    --workers "$NUM_WORKERS" \
     2>&1 | tee "$LOG_FILE"
 
 EXIT_CODE=$?

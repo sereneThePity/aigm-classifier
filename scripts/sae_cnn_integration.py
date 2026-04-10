@@ -292,7 +292,7 @@ def load_training_data_with_sae(
         segment_duration=segment_duration,
         target_loudness=-20.0,
         hp_freq=20,
-        num_workers=0,  # CPU only
+        workers=0,  # CPU only
         codec_name=None
     )
     

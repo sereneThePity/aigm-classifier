@@ -184,14 +184,14 @@ Usage:
     X_original, y = load_dataset_comprehensive(
         manifest_csv="data/test/manifest.csv",
         codec_name=None,
-        num_workers=20
+        workers=20
     )
     
     # Load data WITH codec confounder
     X_with_codec, y = load_dataset_comprehensive(
         manifest_csv="data/test/manifest.csv",
         codec_name="griffinmel",
-        num_workers=20
+        workers=20
     )
     
     # Compare shapes
@@ -239,7 +239,7 @@ Step 3: Train on augmented dataset
 
     X_train, y_train = load_dataset_comprehensive(
         manifest_csv="data/train/manifest_augmented.csv",
-        num_workers=20
+        workers=20
     )
     
     # Train your model with X_train and y_train
@@ -276,7 +276,7 @@ Test how your trained model performs on audio processed with different codecs:
         X_test, y_test = load_dataset_comprehensive(
             manifest_csv="data/test/manifest.csv",
             codec_name=codec,
-            num_workers=20
+            workers=20
         )
         
         # Evaluate

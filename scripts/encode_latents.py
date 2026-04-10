@@ -165,7 +165,7 @@ if __name__ == "__main__":
     parser.add_argument("--codecs", nargs="+", default=["encodec", "dac", "audiolm", "valle", "griffin"], 
                         help="List of codecs to use")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
-    parser.add_argument("--num_workers", type=int, default=None,
+    parser.add_argument("--workers", type=int, default=None,
                         help="Number of parallel codec workers (default: number of codecs)")
     args = parser.parse_args()
     
@@ -221,12 +221,12 @@ if __name__ == "__main__":
             print(f"   {codec}: {count} files")
     
     # Number of parallel workers (default: one per codec)
-    num_workers = args.num_workers if args.num_workers else len(args.codecs)
+    workers = args.workers if args.workers else len(args.codecs)
     
-    print(f"\n🔄 Processing {len(args.codecs)} codecs with {num_workers} parallel workers...")
+    print(f"\n🔄 Processing {len(args.codecs)} codecs with {workers} parallel workers...")
     
     # Process each codec in parallel
-    with Pool(num_workers) as pool:
+    with Pool(workers) as pool:
         worker_fn = partial(process_codec_worker, df=df_filtered, output_dir=output_dir, CODECS=CODECS)
         results = pool.map(worker_fn, args.codecs)
     

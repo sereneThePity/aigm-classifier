@@ -306,7 +306,7 @@ def main(args):
         dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=0  # CPU only
+        workers=0  # CPU only
     )
     
     print(f"\n📦 DataLoader created")

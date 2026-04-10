@@ -42,6 +42,6 @@ python scripts/encode_latents.py \
     --output_dir "$OUTPUT_DIR" \
     --codecs $CODECS \
     --device "$DEVICE" \
-    --num_workers "$NUM_WORKERS"
+    --workers "$NUM_WORKERS"
 
 echo -e "${GREEN}✅ Encoding complete!${NC}"
