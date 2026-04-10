@@ -1,6 +1,7 @@
 """
 Encode audio through neural codecs with equal dataset split.
 Splits dataset randomly and equally among multiple codecs.
+Processes each codec in parallel with a dedicated worker process.
 """
 
 import torch
@@ -9,6 +10,9 @@ import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 import pandas as pd
+from multiprocessing import Pool, Manager
+import os
+from functools import partial
 from utils import normalize_audio, apply_highpass_filter
 from neural_codec_confounders import MetaEnCodecWrapper, DACWrapper, AudioLMCodecWrapper, VALLECodecWrapper, GriffinMelCodec
 
@@ -110,6 +114,48 @@ def assign_codecs(df, codec_names):
     
     return codec_assignments
 
+
+def process_codec_worker(codec_name, df, output_dir, CODECS):
+    """
+    Worker function to process all files for a single codec.
+    Called in parallel for each codec.
+    
+    Args:
+        codec_name: Name of codec to process
+        df: Full DataFrame with codec assignments
+        output_dir: Output directory path
+        CODECS: Dictionary of codec classes
+    
+    Returns:
+        Tuple of (codec_name, success_count, total_count)
+    """
+    # Load codec in this process
+    codec_class = CODECS[codec_name]
+    codec = codec_class(sr=44100)
+    
+    # Only call eval() if codec has a model attribute (PyTorch models)
+    if hasattr(codec, 'model'):
+        codec.model.eval()
+    
+    # Filter files for this codec
+    codec_files = df[df["assigned_codec"] == codec_name]
+    
+    success_count = 0
+    total_count = len(codec_files)
+    
+    # Process all files for this codec
+    for _, row in tqdm(codec_files.iterrows(), total=total_count, desc=f"{codec_name}"):
+        file_path = row["filepath"]
+        label = row["label"]
+        
+        output_path = output_dir / codec_name / str(label) / f"{Path(file_path).stem}.npy"
+        
+        success = encode_decode_save(file_path, output_path, codec)
+        if success:
+            success_count += 1
+    
+    return codec_name, success_count, total_count
+
 if __name__ == "__main__":
     import argparse
     
@@ -119,42 +165,80 @@ if __name__ == "__main__":
     parser.add_argument("--codecs", nargs="+", default=["encodec", "dac", "audiolm", "valle", "griffin"], 
                         help="List of codecs to use")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
+    parser.add_argument("--num_workers", type=int, default=None,
+                        help="Number of parallel codec workers (default: number of codecs)")
     args = parser.parse_args()
     
     # Load manifest
     df = pd.read_csv(args.manifest)
     output_dir = Path(args.output_dir)
     
-    # Assign codecs randomly and equally
-    codec_assignments = assign_codecs(df, args.codecs)
-    df["assigned_codec"] = codec_assignments
+    # Deduplicate manifest by (filepath stem, label) since multiple manifest entries
+    # can have the same file stem but different full paths (e.g., different generators)
+    df['file_stem'] = df['filepath'].apply(lambda x: Path(x).stem)
+    df_deduplicated = df.drop_duplicates(subset=['file_stem', 'label'], keep='first')
+    df_dedup_indices = df_deduplicated.index.tolist()
     
-    print(f"📊 Dataset split:")
+    print(f"📝 Manifest deduplication: {len(df)} entries -> {len(df_deduplicated)} unique (stem, label) pairs")
+    
+    # Get all codec directories that exist (for checking previously processed files)
+    all_available_codecs = [d.name for d in output_dir.iterdir() if d.is_dir()]
+    
+    # Filter out files that have already been processed by ANY codec
+    already_processed_indices = []
+    
+    for idx, row in df_deduplicated.iterrows():
+        file_stem = row['file_stem']
+        label = row['label']
+        
+        # Check if file was processed by any codec that exists in output directory
+        found = False
+        for codec in all_available_codecs:
+            output_path = output_dir / codec / str(label) / f"{file_stem}.npy"
+            if output_path.exists():
+                found = True
+                break
+        
+        if found:
+            already_processed_indices.append(idx)
+    
+    if already_processed_indices:
+        print(f"⏭️  Found {len(already_processed_indices)} already processed files, skipping...")
+        df_filtered = df_deduplicated.drop(already_processed_indices)
+    else:
+        df_filtered = df_deduplicated.copy()
+    
+    df_filtered = df_filtered.reset_index(drop=True)
+    
+    # Assign codecs randomly and equally to remaining files
+    codec_assignments = assign_codecs(df_filtered, args.codecs)
+    df_filtered["assigned_codec"] = codec_assignments
+    
+    print(f"📊 Dataset split ({len(df_filtered)} files to process, {len(already_processed_indices)} skipped):")
     for codec in args.codecs:
-        count = (df["assigned_codec"] == codec).sum()
-        print(f"   {codec}: {count} files")
+        count = (df_filtered["assigned_codec"] == codec).sum()
+        if count > 0:
+            print(f"   {codec}: {count} files")
     
-    # Process by codec
-    for codec_name in args.codecs:
-        print(f"\n🎯 Processing with {codec_name}...")
-        
-        # Load codec in inference mode
-        codec_class = CODECS[codec_name]
-        codec = codec_class(sr=44100)
-        
-        # Only call eval() if codec has a model attribute (PyTorch models)
-        if hasattr(codec, 'model'):
-            codec.model.eval()
-        
-        # Filter files for this codec
-        codec_files = df[df["assigned_codec"] == codec_name]
-        
-        for _, row in tqdm(codec_files.iterrows(), total=len(codec_files), desc=codec_name):
-            file_path = row["filepath"]
-            label = row["label"]
-            
-            output_path = output_dir / codec_name / str(label) / f"{Path(file_path).stem}.npy"
-            
-            success = encode_decode_save(file_path, output_path, codec)
+    # Number of parallel workers (default: one per codec)
+    num_workers = args.num_workers if args.num_workers else len(args.codecs)
     
-    print("\n✅ Done!")
+    print(f"\n🔄 Processing {len(args.codecs)} codecs with {num_workers} parallel workers...")
+    
+    # Process each codec in parallel
+    with Pool(num_workers) as pool:
+        worker_fn = partial(process_codec_worker, df=df_filtered, output_dir=output_dir, CODECS=CODECS)
+        results = pool.map(worker_fn, args.codecs)
+    
+    # Print results
+    print("\n✅ Processing complete!")
+    print(f"\n📈 Results:")
+    total_success = 0
+    total_files = 0
+    for codec_name, success_count, total_count in results:
+        total_success += success_count
+        total_files += total_count
+        success_rate = (success_count / total_count * 100) if total_count > 0 else 0
+        print(f"   {codec_name}: {success_count}/{total_count} ({success_rate:.1f}%)")
+    
+    print(f"\n   Total: {total_success}/{total_files} ({total_success/total_files*100:.1f}%)")

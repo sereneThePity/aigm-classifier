@@ -301,8 +301,13 @@ class VALLECodecWrapper(BaseCodec):
         
         return tokens_hierarchical, phase
     
-    def decode(self, tokens_hierarchical: List[np.ndarray], phase: np.ndarray) -> np.ndarray:
-        """Reconstruct audio from hierarchical tokens."""
+    def decode(self, encoded: Tuple[List[np.ndarray], np.ndarray]) -> np.ndarray:
+        """Reconstruct audio from hierarchical tokens.
+        
+        Args:
+            encoded: Tuple of (tokens_hierarchical, phase) from encode()
+        """
+        tokens_hierarchical, phase = encoded
         
         # Reconstruct log-magnitude from hierarchy
         log_mag_reconstructed = np.zeros_like(phase)
@@ -322,8 +327,8 @@ class VALLECodecWrapper(BaseCodec):
     
     def process_audio(self, audio: np.ndarray) -> np.ndarray:
         """Full encode-decode cycle."""
-        tokens_hierarchical, phase = self.encode(audio)
-        decoded = self.decode(tokens_hierarchical, phase)
+        encoded = self.encode(audio)
+        decoded = self.decode(encoded)
         return decoded[:len(audio)]
 
 
