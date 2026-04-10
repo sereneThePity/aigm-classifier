@@ -2,6 +2,7 @@ import os
 import numpy as np
 import librosa
 import pandas as pd
+import torch
 from tqdm import tqdm
 from multiprocessing import Pool
 from utils import (
@@ -12,7 +13,7 @@ from utils import (
 from neural_codec_confounders import NeuralCodecConfounder
 
 
-# ===== Comprehensive Preprocessing Pipeline =====
+# ===== Audio Preprocessing Pipeline =====
 
 def load_and_prep_audio(
     file_path,
@@ -23,7 +24,7 @@ def load_and_prep_audio(
     codec_name=None,
     codec_confounder=None
 ):
-    """Comprehensive audio preprocessing: load, resample, normalize, trim, crop, filter, codec."""
+    """Load and preprocess audio: resample, normalize, trim, crop, filter, apply codec."""
     try:
         # Load audio
         y, loaded_sr = librosa.load(file_path, sr=None, mono=True)
@@ -51,11 +52,7 @@ def load_and_prep_audio(
         
         # Apply neural codec if specified
         if codec_name is not None and codec_confounder is not None:
-            if codec_name == 'random':
-                codec_audio, _ = codec_confounder.apply_random_codec(y)
-            else:
-                codec_audio = codec_confounder.apply_codec(y, codec_name)
-            
+            codec_audio = codec_confounder.apply_codec(y, codec_name)
             if codec_audio is not None:
                 y = codec_audio
         
@@ -95,49 +92,36 @@ def pad_or_crop_spectrogram(mel_spec_db, target_shape=(128, 128)):
 # Module-level codec management for multiprocessing workers
 _worker_codec_confounder = None
 _worker_codec_cache = {}
-_worker_device_type = 'gpu'
 
 
-def _init_worker(codec_name, device_type='gpu'):
-    """Initialize codec confounder once per worker process."""
-    global _worker_codec_confounder, _worker_codec_cache, _worker_device_type
-    _worker_device_type = device_type
+def _init_worker(codec_name):
+    """Initialize codec confounder once per worker process (called once per worker)."""
+    global _worker_codec_confounder, _worker_codec_cache
     
     if codec_name is None:
         _worker_codec_confounder = None
         return
     
-    # Initialize codec based on device type
-    if device_type == 'both':
-        _worker_codec_confounder = NeuralCodecConfounder(sr=44100, device_type='gpu')
-        try:
-            cpu_confounder = NeuralCodecConfounder(sr=44100, device_type='cpu')
-            for codec_key, codec_obj in cpu_confounder.codecs.items():
-                if codec_key not in _worker_codec_confounder.codecs:
-                    _worker_codec_confounder.codecs[codec_key] = codec_obj
-        except:
-            pass  # Use GPU codecs only if CPU init fails
-    else:
-        _worker_codec_confounder = NeuralCodecConfounder(sr=44100, init_only=codec_name, device_type=device_type)
-    
+    _worker_codec_confounder = NeuralCodecConfounder(sr=44100, init_only=codec_name)
     _worker_codec_cache = {}
+
 
 def _process_audio_file(args_tuple):
     """Process a single audio file: preprocess, extract mel spectrogram, pad/crop."""
-    global _worker_codec_confounder, _worker_codec_cache, _worker_device_type
+    global _worker_codec_confounder, _worker_codec_cache
     
     filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec_name = args_tuple
     
     try:
         # Initialize codec confounder if needed
         local_codec_confounder = None
-        if codec_name is not None and codec_name != 'random':
+        if codec_name is not None:
             if codec_name in _worker_codec_cache:
                 local_codec_confounder = _worker_codec_cache[codec_name]
             elif _worker_codec_confounder is not None:
                 local_codec_confounder = _worker_codec_confounder
             else:
-                local_codec_confounder = NeuralCodecConfounder(sr=44100, init_only=codec_name, device_type=_worker_device_type)
+                local_codec_confounder = NeuralCodecConfounder(sr=44100, init_only=codec_name)
                 _worker_codec_cache[codec_name] = local_codec_confounder
         
         # Preprocess audio
@@ -167,41 +151,110 @@ def _process_audio_file(args_tuple):
         return None, None
 
 
-def load_precomputed_latents(manifest_csv, latent_dir, target_shape=(128, 128)):
-    """Load pre-encoded latents (.npy files) from disk."""
-    df = pd.read_csv(manifest_csv)
-    X, y = [], []
-    
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="Loading precomputed latents"):
-        try:
-            filepath = row["filepath"]
-            label = row["label"]
-            
-            # Load latent file (.npy) based on audio filename
-            base_name = os.path.splitext(os.path.basename(filepath))[0]
-            latent_path = os.path.join(latent_dir, f"{base_name}.npy")
-            
-            if not os.path.exists(latent_path):
-                print(f"⚠️ Latent file not found: {latent_path}")
+def scan_latent_files(latent_dir):
+    """Scan latent directory and return list of (filepath, label) tuples without loading data."""
+    file_list = []
+    print(f"   Scanning codec subdirectories...")
+    for codec_dir in os.listdir(latent_dir):
+        codec_subdir = os.path.join(latent_dir, codec_dir)
+        if not os.path.isdir(codec_subdir):
+            continue
+        for label_dir in os.listdir(codec_subdir):
+            label_subdir = os.path.join(codec_subdir, label_dir)
+            if not os.path.isdir(label_subdir):
                 continue
-            
+            try:
+                label = int(label_dir)
+            except ValueError:
+                continue
+            for filename in os.listdir(label_subdir):
+                if filename.endswith('.npy'):
+                    file_list.append((os.path.join(label_subdir, filename), label))
+    print(f"   Found {len(file_list)} latent files.")
+    return file_list
+
+
+class LazyLatentDataset(torch.utils.data.Dataset):
+    """Lazily loads .npy latent files one at a time to avoid OOM."""
+
+    def __init__(self, file_list, target_shape=(128, 128)):
+        """
+        Args:
+            file_list: list of (filepath, label) tuples
+            target_shape: desired 2D shape for each latent
+        """
+        self.file_list = file_list
+        self.target_shape = target_shape
+
+    def __len__(self):
+        return len(self.file_list)
+
+    def __getitem__(self, idx):
+        path, label = self.file_list[idx]
+        latent = np.load(path)
+
+        # Handle 1D latent arrays (codec codes) - reshape to 2D
+        if latent.ndim == 1:
+            size = int(np.prod(self.target_shape))
+            if latent.size >= size:
+                latent = latent[:size].reshape(self.target_shape)
+            else:
+                latent = np.pad(latent, (0, size - latent.size))
+                latent = latent.reshape(self.target_shape)
+        else:
+            latent = pad_or_crop_spectrogram(latent, self.target_shape)
+
+        # Add channel dimension: (H, W) -> (1, H, W)
+        latent = latent[np.newaxis, ...]
+        return torch.from_numpy(latent).float(), label
+
+
+def load_precomputed_latents(latent_dir, target_shape=(128, 128)):
+    """Load all pre-encoded latents (.npy files) from codec subdirectories.
+    
+    Recursively loads all .npy files from latent_dir/codec/label/ structure.
+    Handles both 1D codec codes and 2D mel spectrograms.
+    """
+    file_list = scan_latent_files(latent_dir)
+    
+    if not file_list:
+        print(f"❌ No latent files found in {latent_dir}")
+        return np.array([]), np.array([])
+    
+    X, y = [], []
+    pbar = tqdm(total=len(file_list), desc="Loading latents", unit="file")
+    
+    for latent_path, label in file_list:
+        try:
             latent = np.load(latent_path)
-            latent = pad_or_crop_spectrogram(latent, target_shape)
+            
+            # Handle 1D latent arrays (codec codes) - reshape to 2D
+            if latent.ndim == 1:
+                size = np.prod(target_shape)
+                if latent.size >= size:
+                    latent = latent[:size].reshape(target_shape)
+                else:
+                    latent = np.pad(latent, (0, size - latent.size))
+                    latent = latent.reshape(target_shape)
+            else:
+                latent = pad_or_crop_spectrogram(latent, target_shape)
             
             X.append(latent)
             y.append(label)
-        
         except Exception as e:
-            print(f"❌ Error loading latent for {filepath}: {e}")
+            print(f"\n⚠️  Error loading {latent_path}: {e}")
+        pbar.update(1)
+    
+    pbar.close()
     
     if not X:
         print(f"❌ No latents loaded from {latent_dir}")
         return np.array([]), np.array([])
     
-    X = np.array(X)[..., np.newaxis]  # Add channel dimension
+    X = np.array(X)[..., np.newaxis]
     y = np.array(y)
     
-    print(f"✅ Loaded {len(X)} precomputed latents")
+    print(f"✅ Loaded {len(X)} precomputed latents from {latent_dir}")
     return X, y
 
 
@@ -212,58 +265,49 @@ def load_dataset_comprehensive(
     segment_duration=5.0,
     target_loudness=-20.0,
     hp_freq=20,
-    num_workers=12,
-    codec_name=None,
-    device_type='gpu',
-    latent_mode='cpu_codecs',
+    workers=12,
+    latent_mode='random',
     latent_dir=None
 ):
     """
-    Load dataset with full preprocessing pipeline.
+    Load dataset with preprocessing pipeline.
+    
+    Two modes:
+    1. latent_mode='precomputed': Load pre-encoded latents from latent_dir (ignores manifest_csv)
+    2. latent_mode='random' or codec_name: Apply CPU codecs to audio files from manifest_csv in parallel
     
     Args:
-        manifest_csv: Path to CSV with 'filepath' and 'label' columns
+        manifest_csv: Path to CSV with 'filepath' and 'label' columns (used when latent_mode != 'precomputed')
         n_mels: Number of mel frequency bins (default 128)
-        target_shape: Target shape for mel spectrogram (freq, time)
+        target_shape: Target shape for latents/spectrograms (freq, time)
         segment_duration: Fixed segment duration in seconds (default 5.0s)
         target_loudness: Target RMS level in dB (default -20 dB)
         hp_freq: High-pass filter frequency in Hz (default 20 Hz)
-        num_workers: Number of processes for multiprocessing
-        codec_name: Neural codec name or 'random' (only for cpu_codecs mode)
-        device_type: 'cpu', 'gpu', or 'both'
-        latent_mode: 'cpu_codecs' or 'precomputed'
+        workers: Number of processes for multiprocessing
+        latent_mode: 'precomputed', 'random' (random CPU codec per sample), or specific codec name
         latent_dir: Directory with precomputed latents (required if latent_mode='precomputed')
     
     Returns:
         X: Array of shape (n_samples, freq, time, 1)
         y: Array of labels
     """
-    # Use precomputed latents if requested
+    # Path 1: Use precomputed latents
     if latent_mode == 'precomputed':
         if latent_dir is None:
             raise ValueError("latent_dir must be provided when latent_mode='precomputed'")
-        return load_precomputed_latents(manifest_csv, latent_dir, target_shape)
+        return load_precomputed_latents(latent_dir, target_shape)
     
-    # Otherwise, process audio with optional codec augmentation
+    # Path 2: Process audio files with codec augmentation
     df = pd.read_csv(manifest_csv)
     X, y = [], []
     
-    # Create balanced codec assignments if using random codecs
+    # Determine codec assignments
     assigned_codecs = None
-    if codec_name == 'random':
-        # Get available codecs
-        if device_type == 'both':
-            gpu_confounder = NeuralCodecConfounder(sr=44100, device_type='gpu')
-            cpu_confounder = NeuralCodecConfounder(sr=44100, device_type='cpu')
-            available_codecs = list(set(
-                gpu_confounder.get_available_codecs() + 
-                cpu_confounder.get_available_codecs()
-            ))
-        else:
-            temp_confounder = NeuralCodecConfounder(sr=44100, device_type=device_type)
-            available_codecs = temp_confounder.get_available_codecs()
+    if latent_mode == 'random':
+        # Create balanced codec assignments across available CPU codecs
+        temp_confounder = NeuralCodecConfounder(sr=44100, device_type='cpu')
+        available_codecs = temp_confounder.get_available_codecs()
         
-        # Create balanced codec assignments
         num_files = len(df)
         num_codecs = len(available_codecs)
         repetitions = (num_files + num_codecs - 1) // num_codecs
@@ -271,25 +315,25 @@ def load_dataset_comprehensive(
         assigned_codecs = (available_codecs * repetitions)[:num_files]
         np.random.shuffle(assigned_codecs)
     
-    # Build argument tuples for each file
+    # Build argument tuples for multiprocessing
     args_list = []
     for i, (filepath, label) in enumerate(zip(df["filepath"], df["label"])):
-        assigned_codec = assigned_codecs[i] if assigned_codecs is not None else codec_name
-        args_list.append((filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, assigned_codec))
+        codec = assigned_codecs[i] if assigned_codecs is not None else latent_mode
+        args_list.append((filepath, label, segment_duration, target_loudness, hp_freq, n_mels, target_shape, codec))
     
     # Process files in parallel
-    init_codec = None if assigned_codecs is not None else codec_name
-    with Pool(num_workers, initializer=_init_worker, initargs=(init_codec, device_type)) as pool:
+    init_codec = None if assigned_codecs is not None else latent_mode
+    with Pool(workers, initializer=_init_worker, initargs=(init_codec,)) as pool:
         results = list(tqdm(pool.imap(_process_audio_file, args_list), 
                            total=len(df), desc="Processing"))
     
-    # Collect results
-    for mel_spec_db, label in results:
-        if mel_spec_db is not None and label is not None:
-            X.append(mel_spec_db)
+    # Aggregate results
+    for mel_spec, label in results:
+        if mel_spec is not None and label is not None:
+            X.append(mel_spec)
             y.append(label)
     
-    X = np.array(X)[..., np.newaxis]  # Add channel dimension
+    X = np.array(X)[..., np.newaxis]  # Add channel dimension (n_samples, freq, time, 1)
     y = np.array(y)
     
     return X, y

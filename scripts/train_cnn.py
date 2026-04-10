@@ -6,11 +6,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import TensorDataset, DataLoader, Subset
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 from utils import ROOT_DIR, DATA_DIR
-from preprocess import load_dataset_comprehensive
-from neural_codec_confounders import get_available_codecs
+from preprocess import load_dataset_comprehensive, scan_latent_files, LazyLatentDataset
 
 
 class SimpleCNN(nn.Module):
@@ -92,90 +92,103 @@ if __name__ == '__main__':
     parser.add_argument('--val_split', type=float, default=0.2, help='Validation set fraction')
     parser.add_argument('--segment_duration', type=float, default=5.0, help='Audio segment duration in seconds')
     parser.add_argument('--n_mels', type=int, default=128, help='Number of mel frequency bins')
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for multiprocessing (reduce to 2-4 when using codecs)')
-    parser.add_argument('--device_type', choices=['cpu', 'gpu', 'both'], default='gpu', 
-                        help='Device type: "cpu" uses griffinmel/audiolm/valle, "gpu" uses encodec/dac, "both" uses all available codecs')
-    parser.add_argument('--latent_mode', choices=['cpu_codecs', 'precomputed'], default='cpu_codecs',
-                        help='Latent source mode: "cpu_codecs" applies CPU codecs during training (default), "precomputed" loads pre-encoded latents from disk')
-    parser.add_argument('--latent_dir', type=str, default=None, 
+    parser.add_argument('--workers', type=int, default=4, help='Number of workers for multiprocessing (reduce to 2-4 when using codecs)')
+    parser.add_argument('--latent_mode', type=str, default=None,
+                        help='Latent source: "precomputed" loads pre-encoded latents from disk, "random" applies random codec per sample, or specify codec name (encodec, dac, audiolm, valle, griffinmel)')
+    parser.add_argument('--latent_dir', type=str, default=None,
                         help='Directory containing pre-computed latent files (.npy). Required if --latent_mode is "precomputed"')
-    parser.add_argument('--codec', nargs='?', const='random', default=None, 
-                        help='Apply neural codec to audio during training (only used with --latent_mode cpu_codecs). Use "random" (default) to pick random codec per sample, or specify a codec name. Available on CPU: griffinmel, audiolm, valle. Available on GPU: encodec, dac')
     args = parser.parse_args()
     
     print("=" * 70)
     print("🎵 Training CNN Classifier on Preprocessed Audio Data")
     print("=" * 70)
     
-    # Check manifest exists
-    if not os.path.exists(args.manifest):
-        print(f"❌ Manifest file not found: {args.manifest}")
-        print(f"   Please create a manifest CSV using build_manifest.py")
-        exit(1)
-    
     # Load preprocessed dataset
     print(f"\n📂 Loading dataset...")
     print(f"   Latent mode: {args.latent_mode}")
     
-    # Setup codec augmentation if using CPU codecs mode
-    codec_name = None
-    if args.latent_mode == 'cpu_codecs' and args.codec:
-        # Get available codecs based on device_type
-        if args.device_type == 'both':
-            gpu_codecs = get_available_codecs(device_type='gpu')
-            cpu_codecs = get_available_codecs(device_type='cpu')
-            available_codecs = list(set(gpu_codecs + cpu_codecs))  # Combine and remove duplicates
-        else:
-            available_codecs = get_available_codecs(device_type=args.device_type)
-        
-        if available_codecs:
-            # Validate codec_name if it's not 'random'
-            if args.codec != 'random' and args.codec not in available_codecs:
-                print(f"   ⚠️  Codec '{args.codec}' not available. Available: {', '.join(sorted(available_codecs))}")
-                codec_name = 'random'
-            else:
-                codec_name = args.codec
-        else:
-            print(f"   ⚠️  No codecs available for {args.device_type}")
-            codec_name = None
-    elif args.latent_mode == 'precomputed':
+    if args.latent_mode == 'precomputed':
+        # Validate latent_dir
         print(f"   Using precomputed latents from: {args.latent_dir}")
         if args.latent_dir is None or not os.path.exists(args.latent_dir):
             print(f"❌ Latent directory not found: {args.latent_dir}")
             exit(1)
-    
-    X, y = load_dataset_comprehensive(
-        args.manifest,
-        n_mels=args.n_mels,
-        target_shape=(args.n_mels, 128),
-        segment_duration=args.segment_duration,
-        target_loudness=-20.0,
-        hp_freq=20,
-        num_workers=args.num_workers,
-        codec_name=codec_name,
-        device_type=args.device_type,
-        latent_mode=args.latent_mode,
-        latent_dir=args.latent_dir
-    )
-    
-    
-    # Compute input shape from loaded data
-    input_shape = X.shape[1:3]  # (freq_bins, time_steps)
-    unique_labels = np.unique(y)
-    num_classes = len(unique_labels)
-    
-    print(f"✅ Dataset loaded: {X.shape}")
-    
-    # Split into train, val, and test sets
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=args.test_split, random_state=42, stratify=y
-    )
-    
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=args.val_split, random_state=42, stratify=y_train
-    )
-    
-    print(f"📊 Split: train={len(X_train)}, val={len(X_val)}, test={len(X_test)}")
+
+        # Lazy loading: only scan file paths, don't load data into memory
+        file_list = scan_latent_files(args.latent_dir)
+        if not file_list:
+            print("❌ No latent files found.")
+            exit(1)
+
+        target_shape = (args.n_mels, 128)
+        labels = [label for _, label in file_list]
+        indices = list(range(len(file_list)))
+
+        # Split indices into train, val, test
+        train_idx, test_idx = train_test_split(
+            indices, test_size=args.test_split, random_state=42, stratify=labels
+        )
+        train_labels = [labels[i] for i in train_idx]
+        train_idx, val_idx = train_test_split(
+            train_idx, test_size=args.val_split, random_state=42, stratify=train_labels
+        )
+
+        full_dataset = LazyLatentDataset(file_list, target_shape=target_shape)
+        train_dataset = Subset(full_dataset, train_idx)
+        val_dataset = Subset(full_dataset, val_idx)
+        test_dataset = Subset(full_dataset, test_idx)
+
+        input_shape = target_shape
+        num_classes = len(set(labels))
+        num_samples = len(file_list)
+
+        print(f"✅ Dataset scanned: {num_samples} files, {num_classes} classes (lazy loading)")
+        print(f"📊 Split: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}")
+    else:
+        # Check manifest exists
+        if not os.path.exists(args.manifest):
+            print(f"❌ Manifest file not found: {args.manifest}")
+            print(f"   Please create a manifest CSV using build_manifest.py")
+            exit(1)
+
+        X, y = load_dataset_comprehensive(
+            args.manifest,
+            n_mels=args.n_mels,
+            target_shape=(args.n_mels, 128),
+            segment_duration=args.segment_duration,
+            target_loudness=-20.0,
+            hp_freq=20,
+            workers=args.workers,
+            latent_mode=args.latent_mode,
+            latent_dir=args.latent_dir
+        )
+
+        input_shape = X.shape[1:3]
+        unique_labels = np.unique(y)
+        num_classes = len(unique_labels)
+        num_samples = len(X)
+
+        print(f"✅ Dataset loaded: {X.shape}")
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=args.test_split, random_state=42, stratify=y
+        )
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_train, y_train, test_size=args.val_split, random_state=42, stratify=y_train
+        )
+
+        print(f"📊 Split: train={len(X_train)}, val={len(X_val)}, test={len(X_test)}")
+
+        X_train_tensor = torch.from_numpy(X_train).float()
+        y_train_tensor = torch.from_numpy(y_train).long()
+        X_val_tensor = torch.from_numpy(X_val).float()
+        y_val_tensor = torch.from_numpy(y_val).long()
+        X_test_tensor = torch.from_numpy(X_test).float()
+        y_test_tensor = torch.from_numpy(y_test).long()
+
+        train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+        val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
+        test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
     
     # Build model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -185,22 +198,9 @@ if __name__ == '__main__':
     criterion = nn.CrossEntropyLoss()
     print(f"🏗️ Model built ({sum(p.numel() for p in model.parameters()):,} params, device={device})")
     
-    # Convert to tensors
-    X_train_tensor = torch.from_numpy(X_train).float()
-    y_train_tensor = torch.from_numpy(y_train).long()
-    X_val_tensor = torch.from_numpy(X_val).float()
-    y_val_tensor = torch.from_numpy(y_val).long()
-    X_test_tensor = torch.from_numpy(X_test).float()
-    y_test_tensor = torch.from_numpy(y_test).long()
-    
-    # Create data loaders
-    train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-    val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
-    test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
-    
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
     
     print(f"\n🚀 Training ({args.epochs} epochs, LR={args.lr})")
     print("="*50)
@@ -216,7 +216,8 @@ if __name__ == '__main__':
         train_correct = 0
         train_total = 0
         
-        for batch_X, batch_y in train_loader:
+        train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs} [Train]", leave=False)
+        for batch_X, batch_y in train_pbar:
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             optimizer.zero_grad()
             outputs = model(batch_X)
@@ -228,6 +229,7 @@ if __name__ == '__main__':
             _, predicted = torch.max(outputs.data, 1)
             train_total += batch_y.size(0)
             train_correct += (predicted == batch_y).sum().item()
+            train_pbar.set_postfix(loss=train_loss/train_total, acc=100*train_correct/train_total)
         
         train_loss /= train_total
         train_acc = 100 * train_correct / train_total
@@ -239,7 +241,8 @@ if __name__ == '__main__':
         val_total = 0
         
         with torch.no_grad():
-            for batch_X, batch_y in val_loader:
+            val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{args.epochs} [Val]", leave=False)
+            for batch_X, batch_y in val_pbar:
                 batch_X, batch_y = batch_X.to(device), batch_y.to(device)
                 outputs = model(batch_X)
                 loss = criterion(outputs, batch_y)
@@ -275,7 +278,8 @@ if __name__ == '__main__':
     test_total = 0
     
     with torch.no_grad():
-        for batch_X, batch_y in test_loader:
+        test_pbar = tqdm(test_loader, desc="Testing", leave=False)
+        for batch_X, batch_y in test_pbar:
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             outputs = model(batch_X)
             loss = criterion(outputs, batch_y)
@@ -304,7 +308,7 @@ if __name__ == '__main__':
         'learning_rate': args.lr,
         'test_accuracy': float(test_acc),
         'test_loss': float(test_loss),
-        'num_samples': int(len(X)),
+        'num_samples': int(num_samples),
         'num_classes': int(num_classes),
         'input_shape': list(input_shape),
         'segment_duration': args.segment_duration,
