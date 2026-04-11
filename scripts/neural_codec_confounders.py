@@ -96,6 +96,11 @@ class MetaEnCodecWrapper(BaseCodec):
             audio_tensor = torch.from_numpy(audio_resampled).float().unsqueeze(0).unsqueeze(0)
             audio_tensor = audio_tensor.to(self.device)
             
+            # Set target bandwidth (in kbps)
+            # Supported: 1.5, 3, 6, 12, 24 kbps
+            # This controls number of codebooks used: n_q = 2, 4, 8, 16, 32
+            self.model.set_target_bandwidth(self.bandwidth)
+            
             # Encode - returns list of EncodedFrame objects
             encoded_frames = self.model.encode(audio_tensor)
             

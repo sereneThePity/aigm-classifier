@@ -24,6 +24,10 @@ CODECS = {
     "griffin": GriffinMelCodec
 }
 
+# Categorize codecs by device type
+CPU_CODECS = {"griffin", "audiolm", "valle"}
+GPU_CODECS = {"encodec", "dac"}
+
 def preprocess_audio(
     file_path,
     sr=44100,
@@ -115,7 +119,7 @@ def assign_codecs(df, codec_names):
     return codec_assignments
 
 
-def process_codec_worker(codec_name, df, output_dir, CODECS):
+def process_codec_worker(codec_name, df, output_dir, CODECS, codec_kwargs=None):
     """
     Worker function to process all files for a single codec.
     Called in parallel for each codec.
@@ -125,13 +129,21 @@ def process_codec_worker(codec_name, df, output_dir, CODECS):
         df: Full DataFrame with codec assignments
         output_dir: Output directory path
         CODECS: Dictionary of codec classes
+        codec_kwargs: Dict of codec-specific kwargs (e.g., {"encodec": {"bandwidth": 6}})
     
     Returns:
         Tuple of (codec_name, success_count, total_count)
     """
+    if codec_kwargs is None:
+        codec_kwargs = {}
+    
+    
+    # Get codec-specific parameters
+    kwargs = codec_kwargs.get(codec_name, {})
+    
     # Load codec in this process
     codec_class = CODECS[codec_name]
-    codec = codec_class(sr=44100)
+    codec = codec_class(sr=44100, **kwargs)
     
     # Only call eval() if codec has a model attribute (PyTorch models)
     if hasattr(codec, 'model'):
@@ -167,68 +179,62 @@ if __name__ == "__main__":
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--workers", type=int, default=None,
                         help="Number of parallel codec workers (default: number of codecs)")
+    parser.add_argument("--encodec_bw", type=float, default=1.5,
+                        help="EnCodec bandwidth in kbps (1.5, 3, 6, 12, 24) - default: 1.5 (heavy compression)")
     args = parser.parse_args()
     
     # Load manifest
     df = pd.read_csv(args.manifest)
     output_dir = Path(args.output_dir)
     
-    # Deduplicate manifest by (filepath stem, label) since multiple manifest entries
-    # can have the same file stem but different full paths (e.g., different generators)
-    df['file_stem'] = df['filepath'].apply(lambda x: Path(x).stem)
-    df_deduplicated = df.drop_duplicates(subset=['file_stem', 'label'], keep='first')
-    df_dedup_indices = df_deduplicated.index.tolist()
-    
-    print(f"📝 Manifest deduplication: {len(df)} entries -> {len(df_deduplicated)} unique (stem, label) pairs")
-    
-    # Get all codec directories that exist (for checking previously processed files)
-    all_available_codecs = [d.name for d in output_dir.iterdir() if d.is_dir()]
-    
-    # Filter out files that have already been processed by ANY codec
-    already_processed_indices = []
-    
-    for idx, row in df_deduplicated.iterrows():
-        file_stem = row['file_stem']
-        label = row['label']
-        
-        # Check if file was processed by any codec that exists in output directory
-        found = False
-        for codec in all_available_codecs:
-            output_path = output_dir / codec / str(label) / f"{file_stem}.npy"
-            if output_path.exists():
-                found = True
-                break
-        
-        if found:
-            already_processed_indices.append(idx)
-    
-    if already_processed_indices:
-        print(f"⏭️  Found {len(already_processed_indices)} already processed files, skipping...")
-        df_filtered = df_deduplicated.drop(already_processed_indices)
-    else:
-        df_filtered = df_deduplicated.copy()
-    
-    df_filtered = df_filtered.reset_index(drop=True)
+    df_filtered = df.reset_index(drop=True)
     
     # Assign codecs randomly and equally to remaining files
     codec_assignments = assign_codecs(df_filtered, args.codecs)
     df_filtered["assigned_codec"] = codec_assignments
     
-    print(f"📊 Dataset split ({len(df_filtered)} files to process, {len(already_processed_indices)} skipped):")
+    print(f"📊 Dataset split ({len(df_filtered)} files to process):")
     for codec in args.codecs:
         count = (df_filtered["assigned_codec"] == codec).sum()
         if count > 0:
             print(f"   {codec}: {count} files")
     
-    # Number of parallel workers (default: one per codec)
-    workers = args.workers if args.workers else len(args.codecs)
+    # Separate codecs by type
+    cpu_codecs = [c for c in args.codecs if c in CPU_CODECS]
+    gpu_codecs = [c for c in args.codecs if c in GPU_CODECS]
     
-    print(f"\n🔄 Processing {len(args.codecs)} codecs with {workers} parallel workers...")
+    # Prepare codec-specific parameters
+    codec_kwargs = {}
+    if args.encodec_bw:
+        codec_kwargs["encodec"] = {"bandwidth": args.encodec_bw}
     
-    # Process each codec in parallel
-    with Pool(workers) as pool:
-        worker_fn = partial(process_codec_worker, df=df_filtered, output_dir=output_dir, CODECS=CODECS)
-        results = pool.map(worker_fn, args.codecs)
+    print(f"📚 Codec categorization: {len(cpu_codecs)} CPU, {len(gpu_codecs)} GPU")
+    if cpu_codecs:
+        print(f"   CPU codecs: {', '.join(cpu_codecs)}")
+    if gpu_codecs:
+        print(f"   GPU codecs: {', '.join(gpu_codecs)}")
+    if codec_kwargs:
+        print(f"   Codec parameters: {codec_kwargs}")
+    
+    results = []
+    
+    # Process CPU codecs with worker pool
+    if cpu_codecs:
+        workers = args.workers if args.workers else len(cpu_codecs)
+        print(f"\n🔄 Processing {len(cpu_codecs)} CPU codecs with {workers} parallel workers...")
+        with Pool(workers) as pool:
+            worker_fn = partial(process_codec_worker, df=df_filtered, output_dir=output_dir, CODECS=CODECS, codec_kwargs=codec_kwargs)
+            cpu_results = pool.map(worker_fn, cpu_codecs)
+            results.extend(cpu_results)
+    
+    # Process GPU codecs with 2 parallel processes
+    if gpu_codecs:
+        num_gpu_workers = min(2, len(gpu_codecs))
+        print(f"\n🔄 Processing {len(gpu_codecs)} GPU codecs with {num_gpu_workers} parallel GPU processes...")
+        with Pool(num_gpu_workers) as pool:
+            worker_fn = partial(process_codec_worker, df=df_filtered, output_dir=output_dir, CODECS=CODECS, codec_kwargs=codec_kwargs)
+            gpu_results = pool.map(worker_fn, gpu_codecs)
+            results.extend(gpu_results)
     
     # Print results
     print("\n✅ Processing complete!")
