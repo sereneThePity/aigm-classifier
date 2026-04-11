@@ -1,11 +1,11 @@
 #!/bin/bash
 
 #SBATCH --job-name="CNN-Audio-Classifier"
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=20
-#SBATCH --gres=gpu:H100.80:1
+#SBATCH --cpus-per-task=40
+#SBATCH --gres=gpu:A100:1
 #SBATCH --mail-type=NONE
 #SBATCH --output=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.out
 #SBATCH --error=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.err
@@ -27,15 +27,11 @@ NC='\033[0m' # No Color
 EPOCHS=50
 BATCH_SIZE=32
 LEARNING_RATE=0.001
-TEST_SPLIT=0.2
-VAL_SPLIT=0.1
-SEGMENT_DURATION=5.0
-N_MELS=128
-NUM_WORKERS=30
-LATENT_MODE="random"
+SAMPLES=
+LATENT_DIR="/home/student/s/ssahu/share/aigm-classifier/data/encoded_latents"
 
 
-# Parse command line arguments
+# Parse command line arguments``
 while [[ $# -gt 0 ]]; do
     case $1 in
         --epochs)
@@ -50,27 +46,16 @@ while [[ $# -gt 0 ]]; do
             LEARNING_RATE="$2"
             shift 2
             ;;
-        --test_split)
-            TEST_SPLIT="$2"
+        --samples)
+            SAMPLES="$2"
             shift 2
             ;;
-        --val_split)
-            VAL_SPLIT="$2"
-            shift 2
-            ;;
-        --segment_duration)
-            SEGMENT_DURATION="$2"
-            shift 2
-            ;;
-        --n_mels)
-            N_MELS="$2"
-            shift 2
-            ;;
-        --latent_mode)
-            LATENT_MODE="$2"
+        --latent_dir)
+            LATENT_DIR="$2"
             shift 2
             ;;
         *)
+
             echo "Unknown option: $1"
             exit 1
             ;;
@@ -138,14 +123,12 @@ else:
     exit 1
 }
 
-# Verify manifest exists
-MANIFEST="$PROJECT_ROOT/data/trainset/manifest.csv"
-if [ ! -f "$MANIFEST" ]; then
-    echo -e "${RED}❌ Error: Manifest file not found at $MANIFEST${NC}"
-    echo -e "${YELLOW}Please create it using: python3 build_manifest.py${NC}"
+# Verify latent directory exists
+if [ ! -d "$LATENT_DIR" ]; then
+    echo -e "${RED}❌ Error: Latent directory not found at $LATENT_DIR${NC}"
     exit 1
 fi
-echo -e "${GREEN}✓ Manifest found${NC}"
+echo -e "${GREEN}✓ Latent directory found${NC}"
 
 # Change to project root
 cd "$PROJECT_ROOT"
@@ -159,12 +142,8 @@ echo -e "\n${YELLOW}[*] Training Parameters:${NC}"
 echo "    Epochs:            $EPOCHS"
 echo "    Batch Size:        $BATCH_SIZE"
 echo "    Learning Rate:     $LEARNING_RATE"
-echo "    Test Split:        $TEST_SPLIT"
-echo "    Val Split:         $VAL_SPLIT"
-echo "    Segment Duration:  ${SEGMENT_DURATION}s"
-echo "    Mel Frequency Bins: $N_MELS"
-echo "    Latent Mode:       $LATENT_MODE"
-echo "    Manifest:          $MANIFEST"
+echo "    Samples per Class: ${SAMPLES:-all}"
+echo "    Latent Dir:        $LATENT_DIR"
 echo -e "    Log File:          $LOG_FILE"
 
 # Set PyTorch environment variables for GPU optimization
@@ -177,18 +156,18 @@ echo -e "${BLUE}    Starting Training${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
 # Run training
-python3 "$PROJECT_ROOT/scripts/train_cnn.py" \
-    --manifest "$MANIFEST" \
-    --epochs "$EPOCHS" \
-    --batch_size "$BATCH_SIZE" \
-    --lr "$LEARNING_RATE" \
-    --test_split "$TEST_SPLIT" \
-    --val_split "$VAL_SPLIT" \
-    --segment_duration "$SEGMENT_DURATION" \
-    --n_mels "$N_MELS" \
-    --latent_mode "$LATENT_MODE" \
-    --workers "$NUM_WORKERS" \
-    2>&1 | tee "$LOG_FILE"
+CMD="python3 \"$PROJECT_ROOT/scripts/train_cnn.py\" \
+    --latent_dir \"$LATENT_DIR\" \
+    --epochs \"$EPOCHS\" \
+    --batch_size \"$BATCH_SIZE\" \
+    --lr \"$LEARNING_RATE\""
+
+# Add samples argument if specified
+if [ -n "$SAMPLES" ]; then
+    CMD="$CMD --samples \"$SAMPLES\""
+fi
+
+eval "$CMD" 2>&1 | tee "$LOG_FILE"
 
 EXIT_CODE=$?
 
