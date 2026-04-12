@@ -24,7 +24,7 @@ NC='\033[0m'
 # Default parameters
 MANIFEST="${1:-/home/student/s/ssahu/share/aigm-classifier/data/trainset/manifest.csv}"
 OUTPUT_DIR="${2:-/home/student/s/ssahu/share/aigm-classifier/data/encode_test}"
-CODECS="${3:-encodec audiolm valle griffin}"
+CODECS="${3:-encodec dac audiolm valle griffin}"
 DEVICE="cpu"
 NUM_WORKERS=40
 ENCODEC_BW=24
