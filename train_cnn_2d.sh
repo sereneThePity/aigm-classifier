@@ -1,18 +1,18 @@
 #!/bin/bash
 
-#SBATCH --job-name="CNN-Audio-Classifier"
+#SBATCH --job-name="CNN2D-Audio-Classifier"
 #SBATCH --time=24:00:00
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
+#SBATCH --dependency=afterok:9247796
 #SBATCH --cpus-per-task=40
 #SBATCH --gres=gpu:A100:1
-#SBATCH --dependency=afterok:9247750
 #SBATCH --mail-type=NONE
 #SBATCH --output=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.out
 #SBATCH --error=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.err
 
-# SLURM Script to train CNN classifier using GPU on HPC
-# Submit with: sbatch train_cnn_gpu.sh
+# SLURM Script to train 2D CNN classifier using GPU on HPC
+# Submit with: sbatch train_cnn_2d.sh [options]
 # Monitor with: squeue -u $USER
 
 set -e  # Exit on any error
@@ -24,15 +24,15 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Default parameters
+# Default parameters (2D-specific)
 EPOCHS=50
 BATCH_SIZE=32
 LEARNING_RATE=0.001
 SAMPLES=
-LATENT_DIR="/home/student/s/ssahu/share/aigm-classifier/data/encode_test"
+LATENT_DIR="/home/student/s/ssahu/share/aigm-classifier/data/encoded_trainset"
 
 
-# Parse command line arguments``
+# Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         --epochs)
@@ -56,7 +56,6 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         *)
-
             echo "Unknown option: $1"
             exit 1
             ;;
@@ -90,7 +89,7 @@ fi
 echo -e "${GREEN}✓ Conda environment 'music' activated${NC}"
 
 echo -e "\n${BLUE}============================================================${NC}"
-echo -e "${BLUE}    HPC CNN Training with SLURM + GPU${NC}"
+echo -e "${BLUE}    HPC 2D CNN Training with SLURM + GPU${NC}"
 echo -e "${BLUE}============================================================${NC}"
 echo ""
 echo -e "${YELLOW}SLURM Job Information:${NC}"
@@ -117,7 +116,7 @@ if torch.cuda.is_available():
     print(f'  CUDA Version: {torch.version.cuda}')
     print(f'  cuDNN Version: {torch.backends.cudnn.version()}')
     print(f'  GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB')
-else:
+else
     print('⚠ No GPU found - training will run on CPU (slower)')
 " || {
     echo -e "${RED}Failed to check GPU${NC}"
@@ -137,7 +136,7 @@ cd "$PROJECT_ROOT"
 # Create logs directory
 LOG_DIR="$PROJECT_ROOT/logs"
 mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/training_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="$LOG_DIR/training_2d_$(date +%Y%m%d_%H%M%S).log"
 
 echo -e "\n${YELLOW}[*] Training Parameters:${NC}"
 echo "    Epochs:            $EPOCHS"
@@ -153,11 +152,11 @@ export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512  # Prevent OOM issues
 export CUBLAS_WORKSPACE_CONFIG=:16:8  # For cuBLAS performance
 
 echo -e "\n${BLUE}============================================================${NC}"
-echo -e "${BLUE}    Starting Training${NC}"
+echo -e "${BLUE}    Starting 2D CNN Training${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
 # Run training
-CMD="python3 \"$PROJECT_ROOT/scripts/train_cnn.py\" \
+CMD="python3 \"$PROJECT_ROOT/scripts/train_cnn_2d.py\" \
     --latent_dir \"$LATENT_DIR\" \
     --epochs \"$EPOCHS\" \
     --batch_size \"$BATCH_SIZE\" \
