@@ -4,7 +4,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
-#SBATCH --dependency=afterok:9247796
+#SBATCH --dependency=afterok:9247861
 #SBATCH --cpus-per-task=40
 #SBATCH --gres=gpu:A100:1
 #SBATCH --mail-type=NONE
@@ -116,7 +116,7 @@ if torch.cuda.is_available():
     print(f'  CUDA Version: {torch.version.cuda}')
     print(f'  cuDNN Version: {torch.backends.cudnn.version()}')
     print(f'  GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB')
-else
+else:
     print('⚠ No GPU found - training will run on CPU (slower)')
 " || {
     echo -e "${RED}Failed to check GPU${NC}"

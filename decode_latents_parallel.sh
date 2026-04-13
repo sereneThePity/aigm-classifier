@@ -3,7 +3,6 @@
 #SBATCH --job-name="Decode-Latents"
 #SBATCH --time=24:00:00
 #SBATCH --ntasks=1
-#SBATCH --partition=cpu
 #SBATCH --cpus-per-task=40
 #SBATCH --mail-type=NONE
 #SBATCH --output=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.out

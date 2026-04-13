@@ -170,6 +170,10 @@ def process_codec_worker(codec_name, df, output_dir, CODECS, codec_kwargs=None):
 
 if __name__ == "__main__":
     import argparse
+    import multiprocessing
+    
+    # Required for CUDA with multiprocessing: use 'spawn' instead of 'fork'
+    multiprocessing.set_start_method('spawn', force=True)
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True, help="Path to CSV manifest")
@@ -218,15 +222,6 @@ if __name__ == "__main__":
     
     results = []
     
-    # Process CPU codecs with worker pool
-    if cpu_codecs:
-        workers = args.workers if args.workers else len(cpu_codecs)
-        print(f"\n🔄 Processing {len(cpu_codecs)} CPU codecs with {workers} parallel workers...")
-        with Pool(workers) as pool:
-            worker_fn = partial(process_codec_worker, df=df_filtered, output_dir=output_dir, CODECS=CODECS, codec_kwargs=codec_kwargs)
-            cpu_results = pool.map(worker_fn, cpu_codecs)
-            results.extend(cpu_results)
-    
     # Process GPU codecs with 2 parallel processes
     if gpu_codecs:
         num_gpu_workers = min(2, len(gpu_codecs))
@@ -236,6 +231,17 @@ if __name__ == "__main__":
             gpu_results = pool.map(worker_fn, gpu_codecs)
             results.extend(gpu_results)
     
+
+    # Process CPU codecs with worker pool
+    if cpu_codecs:
+        workers = args.workers if args.workers else len(cpu_codecs)
+        print(f"\n🔄 Processing {len(cpu_codecs)} CPU codecs with {workers} parallel workers...")
+        with Pool(workers) as pool:
+            worker_fn = partial(process_codec_worker, df=df_filtered, output_dir=output_dir, CODECS=CODECS, codec_kwargs=codec_kwargs)
+            cpu_results = pool.map(worker_fn, cpu_codecs)
+            results.extend(cpu_results)
+    
+
     # Print results
     print("\n✅ Processing complete!")
     print(f"\n📈 Results:")
