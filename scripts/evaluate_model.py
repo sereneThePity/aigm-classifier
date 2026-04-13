@@ -13,6 +13,41 @@ from train_cnn import SimpleCNN
 from train_cnn_2d import CNN2D
 from scipy.ndimage import zoom
 
+def is_model_2d_cnn(model):
+    """Check if model is a 2D CNN."""
+    return isinstance(model, CNN2D)
+
+def preprocess_spectrograms_for_2d_cnn(X):
+    """
+    Preprocess spectrograms for 2D CNN: resize to (128, 128) and add channel dimension.
+    
+    Args:
+        X: Array of spectrograms with shape (N, 128, T) where T is variable time steps
+    
+    Returns:
+        Array with shape (N, 1, 128, 128)
+    """
+    print(f"Preprocessing data for 2D CNN...")
+    X_reshaped = np.zeros((len(X), 128, 128), dtype=np.float32)
+    for i, spec in enumerate(tqdm(X, desc="Resizing spectrograms", leave=False)):
+        # spec has shape (128, T) where T is variable time steps
+        # Resize to (128, 128)
+        if spec.ndim == 2:
+            # Use zoom to resize to (128, 128)
+            zoom_factors = (128 / spec.shape[0], 128 / spec.shape[1])
+            X_reshaped[i] = zoom(spec, zoom_factors, order=1)  # Linear interpolation
+        else:
+            # Already 2D, just ensure it's 128x128
+            X_reshaped[i] = spec
+    
+    # Add channel dimension: (N, 128, 128) -> (N, 1, 128, 128)
+    return np.expand_dims(X_reshaped, axis=1)
+
+def preprocess_data(X, model):
+    if is_model_2d_cnn(model):
+        return preprocess_spectrograms_for_2d_cnn(X)
+    return X
+
 def load_model_auto(model_path):
     """
     Automatically load either PyTorch or Keras model based on file extension.
@@ -85,27 +120,7 @@ def evaluate(model_path, manifest_path):
         X, y = load_dataset(manifest_path)
     else:
         X, y = load_dataset_comprehensive(manifest_path)
-        
-        # Determine if model is 2D CNN or 1D CNN
-        is_cnn2d = isinstance(model, CNN2D)
-        
-        if is_cnn2d:
-            # For 2D CNN, reshape spectrograms to (N, 128, 128) and add channel dim
-            print(f"Preprocessing data for 2D CNN...")
-            X_reshaped = np.zeros((len(X), 128, 128), dtype=np.float32)
-            for i, spec in enumerate(tqdm(X, desc="Resizing spectrograms", leave=False)):
-                # spec has shape (128, T) where T is variable time steps
-                # Resize to (128, 128)
-                if spec.ndim == 2:
-                    # Use zoom to resize to (128, 128)
-                    zoom_factors = (128 / spec.shape[0], 128 / spec.shape[1])
-                    X_reshaped[i] = zoom(spec, zoom_factors, order=1)  # Linear interpolation
-                else:
-                    # Already 2D, just ensure it's 128x128
-                    X_reshaped[i] = spec
-            
-            # Add channel dimension: (N, 128, 128) -> (N, 1, 128, 128)
-            X = np.expand_dims(X_reshaped, axis=1)
+        X = preprocess_data(X, model)
     
     if model_type == 'pytorch':
         # Convert to torch tensor and move to same device as model
@@ -200,11 +215,11 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
     
     else:  # PyTorch model
         # Use forward hook to capture intermediate activations
-        # Load data in batches to avoid memory issues
         print("Loading data in batches...")
-        X, y = load_dataset_comprehensive(manifest_path)
+        X, y = load_dataset_comprehensive(manifest_path, num_workers=10)
+        X = preprocess_data(X, model)
 
-        activation = {}
+        activation = {} 
         
         def get_activation(name):
             def hook(model, input, output):
@@ -229,7 +244,7 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         
         device = next(model.parameters()).device
         all_features = []
-        batch_size = 16
+        batch_size = 10  # Reduced from 16 to minimize memory usage
         
         print(f"Processing {len(X)} samples in batches of {batch_size}...")
         
@@ -245,8 +260,10 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
             batch_features = activation[layer_name].numpy()
             all_features.append(batch_features)
             
-            # Clear activation cache
+            # Clear activation cache and free GPU memory
             activation[layer_name] = None
+            del X_tensor
+            torch.cuda.empty_cache()
         
         # Concatenate all batch features
         features = np.concatenate(all_features, axis=0)
@@ -254,6 +271,11 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
 
     # Optional: flatten features if needed
     if len(features.shape) > 2:
+        # Save spatial features before flattening (useful for SAE training)
+        spatial_path = save_path.replace(".npy", "_spatial.npy")
+        np.save(spatial_path, features)
+        print(f"✅ Saved spatial features to {spatial_path}")
+        
         features = features.reshape((features.shape[0], -1))
         print(f"Flattened feature shape: {features.shape}")
 

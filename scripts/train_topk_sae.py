@@ -18,6 +18,7 @@ from einops import rearrange
 try:
     import overcomplete
     from overcomplete.visualization import show
+    from overcomplete.sae import train_sae as overcomplete_train_sae
 except ImportError:
     print("ERROR: overcomplete library not found. Install with: pip install overcomplete")
     exit(1)
@@ -164,22 +165,52 @@ def extract_patches(images, patch_size):
     return patches, (num_patches_h, num_patches_w, patch_dim)
 
 
-def load_training_data(data_dir, normalize=True, activation_layer='conv2'):
+def load_training_data(data_dir, normalize=True, activation_layer='conv6'):
     """Load intermediate activations from processed data directory.
     
     Args:
         data_dir: Path to data/processed/ directory
         normalize: Whether to normalize to [0, 1]
-        activation_layer: Which activation layer to load (default: 'conv2')
+        activation_layer: Which activation layer to load (default: 'conv6')
     
     Returns:
-        images: (N, H, W) or (N, H, W, C) array of activations
+        images: (N, H, W, C) array of activations (reshaped if flattened)
     """
     print(f"📂 Loading intermediate activations from {data_dir}")
-    activations_path = os.path.join(data_dir, f"intermediate_activations_{activation_layer}.npy")
-    images = np.load(activations_path)
     
-    print(f"   Original shape: {images.shape}")
+    # Try to load spatial version first (better for SAE)
+    spatial_path = os.path.join(data_dir, f"intermediate_activations_{activation_layer}_spatial.npy")
+    flattened_path = os.path.join(data_dir, f"intermediate_activations_{activation_layer}.npy")
+    
+    if os.path.exists(spatial_path):
+        print(f"   ✓ Found spatial features")
+        images = np.load(spatial_path)
+        print(f"   Shape loaded: {images.shape}")
+    elif os.path.exists(flattened_path):
+        print(f"   ⚠️  Only flattened features found, reshaping...")
+        images = np.load(flattened_path)
+        print(f"   Shape loaded: {images.shape}")
+        
+        # If 2D (flattened), try to reshape back to spatial form
+        if images.ndim == 2:
+            N = images.shape[0]
+            total_features = images.shape[1]
+            print(f"   Data is flattened: ({N}, {total_features})")
+            
+            # Assume square spatial dims and try common channel counts
+            for channels in [512, 256, 128, 64]:
+                spatial_size = int(np.sqrt(total_features / channels))
+                if spatial_size * spatial_size * channels == total_features:
+                    images = images.reshape(N, channels, spatial_size, spatial_size)
+                    print(f"   ✓ Reshaped to spatial: {images.shape} (C={channels}, H=W={spatial_size})")
+                    break
+    else:
+        raise FileNotFoundError(f"Could not find activations for layer '{activation_layer}'")
+    
+    # Move channels to last dimension for uniformity
+    if images.ndim == 4:
+        images = np.transpose(images, (0, 2, 3, 1))  # (N, C, H, W) -> (N, H, W, C)
+        print(f"   ✓ Transposed to (N, H, W, C): {images.shape}")
     
     # Remove singleton dimension if present (but preserve channel dim if it exists)
     if images.ndim == 4 and images.shape[-1] == 1:
@@ -200,52 +231,70 @@ def load_training_data(data_dir, normalize=True, activation_layer='conv2'):
     return images
 
 
-def train_sae(model, train_loader, epochs, lr, device='cpu'):
-    """Train the topK SAE.
+def train_sae(model_dict, train_loader, epochs, lr, device='cpu'):
+    """Train the topK SAE using overcomplete's train_sae with detailed metrics.
     
     Args:
-        model: TopKSAE instance
+        model_dict: Dict with 'model' (TopKSAE instance or raw model) and optionally other params
         train_loader: DataLoader for training patches
         epochs: Number of epochs
         lr: Learning rate
         device: Device to train on
     
     Returns:
-        losses: List of average epoch losses
+        logs: Training logs from overcomplete.sae.train_sae
     """
-    optimizer = torch.optim.Adam(model.model.parameters(), lr=lr)
-    criterion = nn.MSELoss()
+    # Extract model (handle both TopKSAE wrapper and raw model)
+    if isinstance(model_dict, dict):
+        model = model_dict.get('model', model_dict)
+    else:
+        model = model_dict
     
-    losses = []
+    # If it's a TopKSAE wrapper, get the underlying overcomplete model
+    if hasattr(model, 'model'):
+        actual_model = model.model
+    else:
+        actual_model = model
     
-    for epoch in range(epochs):
-        epoch_loss = 0.0
-        batch_count = 0
-        
-        for batch_patches in train_loader:
-            batch_patches = batch_patches[0].to(device).float()
-            
-            # Forward pass
-            recon, codes = model.forward(batch_patches)
-            
-            # Reconstruction loss
-            loss = criterion(recon, batch_patches)
-            
-            # Backward pass
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            epoch_loss += loss.item()
-            batch_count += 1
-        
-        avg_loss = epoch_loss / batch_count
-        losses.append(avg_loss)
-        
-        if (epoch + 1) % max(1, epochs // 10) == 0 or epoch == 0:
-            print(f"   Epoch {epoch+1:3d}/{epochs} | Loss: {avg_loss:.6f}")
+    # Define criterion function for SAE training
+    def criterion(x, x_hat, pre_codes, codes, dictionary):
+        """MSE reconstruction loss."""
+        mse = (x - x_hat).square().mean()
+        return mse
     
-    return losses
+    # Create optimizer
+    optimizer = torch.optim.Adam(actual_model.parameters(), lr=lr)
+    
+    # Create a wrapper dataloader that extracts tensors from tuples
+    class DataLoaderWrapper:
+        def __init__(self, dataloader):
+            self.dataloader = dataloader
+        
+        def __iter__(self):
+            for batch in self.dataloader:
+                # Handle (tensor,) tuple from TensorDataset
+                if isinstance(batch, (list, tuple)):
+                    yield batch[0].to(device).float()
+                else:
+                    yield batch.to(device).float()
+        
+        def __len__(self):
+            return len(self.dataloader)
+    
+    wrapped_loader = DataLoaderWrapper(train_loader)
+    
+    # Train using overcomplete's train_sae function with detailed logging
+    print("Training SAE on patches...")
+    logs = overcomplete_train_sae(
+        actual_model,
+        wrapped_loader,
+        criterion,
+        optimizer,
+        nb_epochs=epochs,
+        device=device
+    )
+    
+    return logs
 
 
 def save_sae(model, output_dir, config):
@@ -292,6 +341,7 @@ def main(args):
     print(f"   ✓ Patches shape: {patches.shape}")
     print(f"   ✓ Patch grid: {num_patches_h}x{num_patches_w}")
     print(f"   ✓ Patch dimension: {patch_dim}")
+    print(f"   ℹ️  Extracting spatial patches preserves local feature structure")
     
     # Normalize patches
     print(f"\n📊 Normalizing patches")
@@ -306,7 +356,6 @@ def main(args):
         dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        workers=0  # CPU only
     )
     
     print(f"\n📦 DataLoader created")
@@ -328,13 +377,16 @@ def main(args):
     # Train SAE
     print(f"\n🎓 Training for {args.epochs} epochs")
     sae.train()
-    losses = train_sae(
+    logs = train_sae(
         sae,
         train_loader,
         args.epochs,
         args.lr,
         device=device
     )
+    
+    # Extract final loss from logs for config
+    final_loss = logs[-1]['loss'] if logs and 'loss' in logs[-1] else 0.0
     
     # Save model
     print(f"\n💾 Saving model")
@@ -348,7 +400,7 @@ def main(args):
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "learning_rate": args.lr,
-        "final_loss": float(losses[-1]),
+        "final_loss": float(final_loss),
     }
     
     output_dir = os.path.join(ROOT_DIR, "models", "topk_sae")
@@ -400,8 +452,8 @@ if __name__ == '__main__':
         help='Use CUDA if available (default: CPU only)'
     )
     parser.add_argument(
-        '--activation_layer', type=str, default='conv2',
-        help='Which activation layer to train on (default: conv2)'
+        '--activation_layer', type=str, default='conv6',
+        help='Which activation layer to train on (default: conv6)'
     )
     
     args = parser.parse_args()
