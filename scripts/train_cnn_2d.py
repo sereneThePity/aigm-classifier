@@ -2,6 +2,7 @@
 import argparse
 import os
 import json
+from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -15,30 +16,30 @@ class CNN2D(nn.Module):
     """6-layer 2D CNN for mel-spectrogram classification."""
     def __init__(self, input_shape, num_classes=2):
         super(CNN2D, self).__init__()
-        # 6 convolutional layers with filters [32, 64, 128, 256, 512, 1024]
+        # 6 convolutional layers with filters [16, 32, 64, 128, 256, 512]
         # Using Conv2d for 2D spectrogram images
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
         self.pool1 = nn.MaxPool2d(2)
         
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
         self.pool2 = nn.MaxPool2d(2)
         
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.pool3 = nn.MaxPool2d(2)
         
-        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         self.pool4 = nn.MaxPool2d(2)
         
-        self.conv5 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
+        self.conv5 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
         self.pool5 = nn.MaxPool2d(2)
         
-        self.conv6 = nn.Conv2d(512, 1024, kernel_size=3, padding=1)
+        self.conv6 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
         self.pool6 = nn.MaxPool2d(2)
         
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc1 = nn.Linear(1024, 512)
+        self.fc1 = nn.Linear(512, 256)
         self.dropout = nn.Dropout(0.5)
-        self.fc2 = nn.Linear(512, num_classes)
+        self.fc2 = nn.Linear(256, num_classes)
     
     def forward(self, x):
         # Input: (batch, 1, 128, 128)
@@ -191,7 +192,7 @@ if __name__ == '__main__':
     
     # Save model and training info
     print("\nSaving model and training info...")
-    model_dir = ROOT_DIR / "models"
+    model_dir = Path(ROOT_DIR) / "models"
     model_dir.mkdir(exist_ok=True)
     
     # Save model checkpoint

@@ -5,14 +5,18 @@ import numpy as np
 import torch
 import argparse
 from pathlib import Path
-from preprocess import load_dataset, load_dataset_with_transforms, load_dataset_comprehensive
+from tqdm import tqdm
+from preprocess import load_dataset, load_dataset_comprehensive
 from utils import ROOT_DIR, DATA_DIR
 import tensorflow as tf
 from train_cnn import SimpleCNN
+from train_cnn_2d import CNN2D
+from scipy.ndimage import zoom
 
 def load_model_auto(model_path):
     """
     Automatically load either PyTorch or Keras model based on file extension.
+    Auto-detects whether it's a 1D CNN or 2D CNN model based on state_dict shape.
     
     Args:
         model_path: Path to model file (.pt for PyTorch, .keras for Keras)
@@ -37,18 +41,30 @@ def load_model_auto(model_path):
                 base_dir = os.path.dirname(model_path)
                 info_path = os.path.join(base_dir, 'training_info.json')
             
+            input_shape = [128, 128]
+            num_classes = 2
+            
             if os.path.exists(info_path):
                 import json
                 with open(info_path, 'r') as f:
                     info = json.load(f)
                     input_shape = info.get('input_shape', [128, 128])
                     num_classes = info.get('num_classes', 2)
-            else:
-                # Default values
-                input_shape = [128, 128]
-                num_classes = 2
             
-            model = SimpleCNN(input_shape, num_classes)
+            # Detect model type from state_dict shape (most reliable method)
+            first_conv_weight = loaded_obj.get('conv1.weight')
+            if first_conv_weight is not None:
+                if first_conv_weight.dim() == 4:  # Conv2d: [out, in, h, w]
+                    print(f"Detected 2D CNN model (Conv2d with shape {first_conv_weight.shape})")
+                    model = CNN2D(input_shape, num_classes)
+                elif first_conv_weight.dim() == 3:  # Conv1d: [out, in, k]
+                    print(f"Detected 1D CNN model (Conv1d with shape {first_conv_weight.shape})")
+                    model = SimpleCNN(input_shape, num_classes)
+                else:
+                    raise ValueError(f"Unknown conv layer dimension: {first_conv_weight.dim()}")
+            else:
+                raise ValueError("Could not find conv1.weight in checkpoint")
+            
             model.load_state_dict(loaded_obj)
         else:
             # It's already a full model object
@@ -63,12 +79,33 @@ def load_model_auto(model_path):
     else:
         raise ValueError(f"Unsupported model format: {model_path}. Use .pt (PyTorch) or .keras (Keras)")
 
-def evaluate(model_path, manifest_path, codec_name=None):
+def evaluate(model_path, manifest_path):
     model, model_type = load_model_auto(model_path)
     if model_type == 'keras':
         X, y = load_dataset(manifest_path)
     else:
-        X, y = load_dataset_comprehensive(manifest_path, codec_name=codec_name)
+        X, y = load_dataset_comprehensive(manifest_path)
+        
+        # Determine if model is 2D CNN or 1D CNN
+        is_cnn2d = isinstance(model, CNN2D)
+        
+        if is_cnn2d:
+            # For 2D CNN, reshape spectrograms to (N, 128, 128) and add channel dim
+            print(f"Preprocessing data for 2D CNN...")
+            X_reshaped = np.zeros((len(X), 128, 128), dtype=np.float32)
+            for i, spec in enumerate(tqdm(X, desc="Resizing spectrograms", leave=False)):
+                # spec has shape (128, T) where T is variable time steps
+                # Resize to (128, 128)
+                if spec.ndim == 2:
+                    # Use zoom to resize to (128, 128)
+                    zoom_factors = (128 / spec.shape[0], 128 / spec.shape[1])
+                    X_reshaped[i] = zoom(spec, zoom_factors, order=1)  # Linear interpolation
+                else:
+                    # Already 2D, just ensure it's 128x128
+                    X_reshaped[i] = spec
+            
+            # Add channel dimension: (N, 128, 128) -> (N, 1, 128, 128)
+            X = np.expand_dims(X_reshaped, axis=1)
     
     if model_type == 'pytorch':
         # Convert to torch tensor and move to same device as model
@@ -89,7 +126,7 @@ def evaluate(model_path, manifest_path, codec_name=None):
         preds_bin = (preds.flatten() > 0.5).astype(int)
     
     acc = np.mean(preds_bin == y)
-    print(f"✅ Accuracy: {acc*100:.2f}% on trainset")
+    print(f"✅ Accuracy: {acc*100:.2f}% on testset")
 
 def evaluate_with_transform(model_path, manifest_path, n_mels=128, target_shape=(128, 128), transform="random"):
     """
@@ -163,13 +200,15 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
     
     else:  # PyTorch model
         # Use forward hook to capture intermediate activations
+        # Load data in batches to avoid memory issues
+        print("Loading data in batches...")
         X, y = load_dataset_comprehensive(manifest_path)
 
         activation = {}
         
         def get_activation(name):
             def hook(model, input, output):
-                activation[name] = output.detach()
+                activation[name] = output.detach().cpu()
             return hook
         
         if layer_name is None:
@@ -188,18 +227,30 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
                 module.register_forward_hook(get_activation(layer_name))
                 break
         
-        # Forward pass
-        X_tensor = torch.from_numpy(X).float()
         device = next(model.parameters()).device
-        X_tensor = X_tensor.to(device)
+        all_features = []
+        batch_size = 16
         
-        with torch.no_grad():
-            model(X_tensor)
+        print(f"Processing {len(X)} samples in batches of {batch_size}...")
         
-        # Get features from activation
-        features = activation[layer_name].cpu().numpy()
+        # Process in batches to avoid memory issues
+        for i in tqdm(range(0, len(X), batch_size), desc="Extracting features"):
+            X_batch = X[i:i+batch_size]
+            X_tensor = torch.from_numpy(X_batch).float().to(device)
+            
+            with torch.no_grad():
+                model(X_tensor)
+            
+            # Get features from activation (already on CPU from hook)
+            batch_features = activation[layer_name].numpy()
+            all_features.append(batch_features)
+            
+            # Clear activation cache
+            activation[layer_name] = None
+        
+        # Concatenate all batch features
+        features = np.concatenate(all_features, axis=0)
         print(f"✅ Extracted features from layer '{layer_name}', shape: {features.shape}")
-        
 
     # Optional: flatten features if needed
     if len(features.shape) > 2:
@@ -225,7 +276,6 @@ if __name__ == "__main__":
     eval_parser = subparsers.add_parser('evaluate', help='Evaluate model without transforms')
     eval_parser.add_argument('--model_path', required=True, help='Path to the model')
     eval_parser.add_argument('--manifest_path', required=True, help='Path to the manifest CSV')
-    eval_parser.add_argument('--codec_name', default=None, help='Codec to apply (random, encodec, dac, griffinmel, audiolm, valle)')
 
     # Subparser for evaluate_with_transform
     eval_trans_parser = subparsers.add_parser('evaluate_transform', help='Evaluate model with transforms')
@@ -246,7 +296,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.command == 'evaluate':
-        evaluate(args.model_path, args.manifest_path, codec_name=args.codec_name)
+        evaluate(args.model_path, args.manifest_path)
     elif args.command == 'evaluate_transform':
         target_shape = (args.freq, args.time)
         evaluate_with_transform(args.model_path, args.manifest_path, args.n_mels, target_shape, args.transform)
