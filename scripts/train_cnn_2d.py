@@ -196,7 +196,7 @@ if __name__ == '__main__':
     model_dir.mkdir(exist_ok=True)
     
     # Save model checkpoint
-    model_path = model_dir / "cnn_2d_model.pt"
+    model_path = model_dir / "cnn_2D.pt"
     torch.save(model.state_dict(), model_path)
     print(f"✅ Model saved to {model_path}")
     
@@ -216,7 +216,7 @@ if __name__ == '__main__':
         "device": str(device)
     }
     
-    info_path = model_dir / "training_info_2d.json"
+    info_path = model_dir / "training_info_2D.json"
     with open(info_path, 'w') as f:
         json.dump(training_info, f, indent=2)
     print(f"✅ Training info saved to {info_path}")
