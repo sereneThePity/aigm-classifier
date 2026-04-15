@@ -424,8 +424,8 @@ if __name__ == '__main__':
         description="Train topK Sparse Autoencoder on spectrograms"
     )
     parser.add_argument(
-        '--patch_size', type=int, default=32,
-        help='Patch size for spectrogram (default: 32)'
+        '--patch_size', type=int, default=8,
+        help='Patch size for spectrogram (default: 8)'
     )
     parser.add_argument(
         '--nb_concepts', type=int, default=128,
