@@ -152,9 +152,11 @@ def extract_patches(images, patch_size):
             ph=ph, pw=pw
         )
     elif images.ndim == 4:
+        # Extract patches per channel to avoid massive dimensionality
+        # Shape: (N, H, W, C) -> (N*C*nh*nw, ph*pw)
         patches = rearrange(
             images,
-            'n (nh ph) (nw pw) c -> (n nh nw) (ph pw c)',
+            'n (nh ph) (nw pw) c -> (n c nh nw) (ph pw)',
             ph=ph, pw=pw
         )
     

@@ -238,32 +238,24 @@ class SAECNNIntegration:
             acts_np = activations.cpu().detach().numpy()
             acts_np = np.transpose(acts_np, (0, 2, 3, 1))  # (B, H, W, C)
             
-            # Flatten activations for SAE encoding
-            # Shape: (batch, height, width, channels) -> (batch*height*width, channels)
-            acts_flat = acts_np.reshape(-1, channels)
+            # Extract patches using the SAME patch_size as SAE training
+            patch_size = self.sae_config.get('patch_size', 2)
+            patches, patch_dims = self._extract_patches_from_activations(acts_np, patch_size)
             
-            print(f"🔧 Activation shape: {acts_np.shape}, flattened to SAE input: {acts_flat.shape}")
+            print(f"🔧 Activation shape: {acts_np.shape}")
+            print(f"   Extracted patches: {patches.shape} (using patch_size={patch_size})")
             
-            # Normalize activations using z-score normalization (mean=0, std=1)
-            # Don't use the patch scaler since it was trained on different data (spectrograms, not CNN features)
-            acts_mean = acts_flat.mean(axis=0, keepdims=True)
-            acts_std = acts_flat.std(axis=0, keepdims=True) + 1e-7
-            acts_normalized = (acts_flat - acts_mean) / acts_std
+            # Normalize patches using z-score (same as training)
+            from sklearn.preprocessing import StandardScaler
+            scaler = StandardScaler()
+            patches_normalized = scaler.fit_transform(patches)
             
-            print(f"   Normalized to: mean={acts_normalized.mean():.4f}, std={acts_normalized.std():.4f}")
+            print(f"   Normalized to: mean={patches_normalized.mean():.4f}, std={patches_normalized.std():.4f}")
             
-            # Pad to SAE expected dimension if needed
-            sae_expected_dim = self.sae_config.get('input_shape', 32768)
-            if acts_normalized.shape[1] < sae_expected_dim:
-                print(f"   ⚠️  Padding from {acts_normalized.shape[1]} to {sae_expected_dim} dimensions with zeros")
-                padded = np.zeros((acts_normalized.shape[0], sae_expected_dim), dtype=acts_normalized.dtype)
-                padded[:, :acts_normalized.shape[1]] = acts_normalized
-                acts_normalized = padded
-            
-            acts_tensor = torch.from_numpy(acts_normalized).float().to(self.device)
+            patches_tensor = torch.from_numpy(patches_normalized).float().to(self.device)
             
             # Get sparse codes
-            sparse_codes = self.sae.encode(acts_tensor)
+            sparse_codes = self.sae.encode(patches_tensor)
             self.sparse_codes_cache['codes'] = sparse_codes
             
             # Reconstruct from codes
@@ -271,13 +263,16 @@ class SAECNNIntegration:
             
             # Reshape back to activation spatial dimensions
             sae_recon_np = sae_reconstruction.cpu().detach().numpy()
-            # Take only the relevant features (original channel dimensions)
-            sae_recon_np = sae_recon_np[:, :channels]
-            # Reshape to original spatial dimensions
-            sae_recon_spatial = sae_recon_np.reshape(batch_size, height, width, channels)
+            # Reconstruct spatial layout from patches
+            sae_recon_spatial = self._reconstruct_patches(
+                sae_recon_np, 
+                batch_size, 
+                patch_dims, 
+                patch_size
+            )
             # Transpose back to (batch, channels, height, width)
             sae_recon_spatial = np.transpose(sae_recon_spatial, (0, 3, 1, 2))
-            sae_recon_tensor = torch.from_numpy(sae_recon_spatial).float().to(self.device)
+            sae_recon_tensor = torch.from_numpy(sae_recon_spatial[:, :, :height, :width]).float().to(self.device)
             
             return {
                 'cnn_output': cnn_output,

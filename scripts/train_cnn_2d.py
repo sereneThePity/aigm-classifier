@@ -19,21 +19,27 @@ class CNN2D(nn.Module):
         # 6 convolutional layers with filters [16, 32, 64, 128, 256, 512]
         # Using Conv2d for 2D spectrogram images
         self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
+        self.relu1 = nn.ReLU()
         self.pool1 = nn.MaxPool2d(2)
         
         self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.relu2 = nn.ReLU()
         self.pool2 = nn.MaxPool2d(2)
         
         self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.relu3 = nn.ReLU()
         self.pool3 = nn.MaxPool2d(2)
         
         self.conv4 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.relu4 = nn.ReLU()
         self.pool4 = nn.MaxPool2d(2)
         
         self.conv5 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.relu5 = nn.ReLU()
         self.pool5 = nn.MaxPool2d(2)
         
         self.conv6 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
+        self.relu6 = nn.ReLU()
         self.pool6 = nn.MaxPool2d(2)
         
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
@@ -45,23 +51,23 @@ class CNN2D(nn.Module):
         # Input: (batch, 1, 128, 128)
         
         # 6 Conv2d blocks
-        x = torch.relu(self.conv1(x))
-        x = self.pool1(x)  # (batch, 32, 64, 64)
+        x = self.relu1(self.conv1(x))
+        x = self.pool1(x)  
         
-        x = torch.relu(self.conv2(x))
-        x = self.pool2(x)  # (batch, 64, 32, 32)
+        x = self.relu2(self.conv2(x))
+        x = self.pool2(x)  
         
-        x = torch.relu(self.conv3(x))
-        x = self.pool3(x)  # (batch, 128, 16, 16)
+        x = self.relu3(self.conv3(x))
+        x = self.pool3(x)  
         
-        x = torch.relu(self.conv4(x))
-        x = self.pool4(x)  # (batch, 256, 8, 8)
+        x = self.relu4(self.conv4(x))
+        x = self.pool4(x)  
         
-        x = torch.relu(self.conv5(x))
-        x = self.pool5(x)  # (batch, 512, 4, 4)
+        x = self.relu5(self.conv5(x))
+        x = self.pool5(x)  
         
-        x = torch.relu(self.conv6(x))
-        x = self.pool6(x)  # (batch, 1024, 2, 2)
+        x = self.relu6(self.conv6(x))
+        x = self.pool6(x)  
         
         # Global average pooling and fully connected
         x = self.global_pool(x).view(x.size(0), -1)  # (batch, 1024)
