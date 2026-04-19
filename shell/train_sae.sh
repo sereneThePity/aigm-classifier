@@ -24,7 +24,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Default parameters (SAE-specific)
-PATCH_SIZE=2
+PATCH_SIZE=1
 NB_CONCEPTS=128
 TOP_K=32
 EPOCHS=50
@@ -120,9 +120,9 @@ echo ""
 echo -e "${YELLOW}[*] Loading CUDA module...${NC}"
 module load cuda/11.8 2>/dev/null || echo "    Note: CUDA module pre-loaded or container-based"
 
-# Check CUDA availability
+# Check CUDA availability and auto-enable if GPU detected
 echo -e "\n${YELLOW}[*] Checking GPU availability...${NC}"
-python3 -c "
+python -c "
 import torch
 if torch.cuda.is_available():
     print(f'✓ GPU Found: {torch.cuda.get_device_name(0)}')
@@ -136,6 +136,14 @@ else:
     echo -e "${RED}Failed to check GPU${NC}"
     exit 1
 }
+
+# Auto-enable CUDA if GPU is available
+if python -c "import torch; import sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+    if [ "$USE_CUDA" = "false" ]; then
+        echo "    → Auto-enabling CUDA"
+        USE_CUDA=true
+    fi
+fi
 
 # Verify data directory exists
 DATA_DIR="$PROJECT_ROOT/data/processed"
@@ -174,7 +182,7 @@ echo -e "${BLUE}    Starting SAE Training${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
 # Run training
-CMD="python3 \"$PROJECT_ROOT/scripts/train_topk_sae.py\" \
+CMD="python \"$PROJECT_ROOT/scripts/train_topk_sae.py\" \
     --patch_size \"$PATCH_SIZE\" \
     --nb_concepts \"$NB_CONCEPTS\" \
     --top_k \"$TOP_K\" \

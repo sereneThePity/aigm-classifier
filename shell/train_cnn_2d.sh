@@ -29,8 +29,9 @@ EPOCHS=50
 BATCH_SIZE=32
 LEARNING_RATE=0.001
 SAMPLES=
+USE_MANIFEST=false
 LATENT_DIR="/home/student/s/ssahu/share/aigm-classifier/data/encoded_trainset"
-
+MANIFEST_PATH="/home/student/s/ssahu/share/aigm-classifier/data/trainset/manifest.csv"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -49,6 +50,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --samples)
             SAMPLES="$2"
+            shift 2
+            ;;
+        --use_manifest)
+            USE_MANIFEST=true
+            shift
+            ;;
+        --manifest)
+            MANIFEST_PATH="$2"
             shift 2
             ;;
         --latent_dir)
@@ -123,12 +132,23 @@ else:
     exit 1
 }
 
-# Verify latent directory exists
-if [ ! -d "$LATENT_DIR" ]; then
-    echo -e "${RED}❌ Error: Latent directory not found at $LATENT_DIR${NC}"
-    exit 1
+# Verify data source path exists
+if [ "$USE_MANIFEST" = true ]; then
+    if [ -z "$MANIFEST_PATH" ]; then
+        MANIFEST_PATH="$PROJECT_ROOT/data/trainset/manifest.csv"
+    fi
+    if [ ! -f "$MANIFEST_PATH" ]; then
+        echo -e "${RED}❌ Error: Manifest file not found at $MANIFEST_PATH${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Manifest file found${NC}"
+else
+    if [ ! -d "$LATENT_DIR" ]; then
+        echo -e "${RED}❌ Error: Latent directory not found at $LATENT_DIR${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Latent directory found${NC}"
 fi
-echo -e "${GREEN}✓ Latent directory found${NC}"
 
 # Change to project root
 cd "$PROJECT_ROOT"
@@ -142,8 +162,14 @@ echo -e "\n${YELLOW}[*] Training Parameters:${NC}"
 echo "    Epochs:            $EPOCHS"
 echo "    Batch Size:        $BATCH_SIZE"
 echo "    Learning Rate:     $LEARNING_RATE"
-echo "    Samples per Class: ${SAMPLES:-all}"
-echo "    Latent Dir:        $LATENT_DIR"
+echo "    Samples:           ${SAMPLES:-all}"
+if [ "$USE_MANIFEST" = true ]; then
+    echo "    Data Source:       Manifest CSV"
+    echo "    Manifest Path:     $MANIFEST_PATH"
+else
+    echo "    Data Source:       Encoded Latents"
+    echo "    Latent Dir:        $LATENT_DIR"
+fi
 echo -e "    Log File:          $LOG_FILE"
 
 # Set PyTorch environment variables for GPU optimization
@@ -156,11 +182,20 @@ echo -e "${BLUE}    Starting 2D CNN Training${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
 # Run training
-CMD="python3 \"$PROJECT_ROOT/scripts/train_cnn_2d.py\" \
-    --latent_dir \"$LATENT_DIR\" \
-    --epochs \"$EPOCHS\" \
-    --batch_size \"$BATCH_SIZE\" \
-    --lr \"$LEARNING_RATE\""
+CMD="python3 \"$PROJECT_ROOT/scripts/train_cnn_2d.py\""
+
+# Add data source arguments
+if [ "$USE_MANIFEST" = true ]; then
+    CMD="$CMD --use_manifest"
+    if [ -n "$MANIFEST_PATH" ]; then
+        CMD="$CMD --manifest \"$MANIFEST_PATH\""
+    fi
+else
+    CMD="$CMD --latent_dir \"$LATENT_DIR\""
+fi
+
+# Add training parameters
+CMD="$CMD --epochs \"$EPOCHS\" --batch_size \"$BATCH_SIZE\" --lr \"$LEARNING_RATE\""
 
 # Add samples argument if specified
 if [ -n "$SAMPLES" ]; then
