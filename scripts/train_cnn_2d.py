@@ -9,7 +9,32 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utils import ROOT_DIR
-from preprocess import load_spectrogram_latents_for_training
+from preprocess import load_spectrogram_latents_for_training, load_manifest_for_training
+
+
+class CNN2D_Legacy(nn.Module):
+    """Legacy 2-layer 2D CNN (smaller version used for cnn_model.pt)."""
+    def __init__(self, input_shape, num_classes=2):
+        super(CNN2D_Legacy, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.relu2 = nn.ReLU()
+        
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc1 = nn.Linear(64, 64)
+        self.fc2 = nn.Linear(64, num_classes)
+    
+    def forward(self, x):
+        # Input: (batch, 1, 128, 128)
+        x = self.relu1(self.conv1(x))
+        x = self.pool1(x)  # (batch, 32, 64, 64)
+        x = self.relu2(self.conv2(x))
+        x = self.global_pool(x).view(x.size(0), -1)  # (batch, 64)
+        x = torch.relu(self.fc1(x))
+        return self.fc2(x)
 
 
 class CNN2D(nn.Module):
@@ -78,7 +103,9 @@ class CNN2D(nn.Module):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train 2D CNN on mel-spectrogram latents")
-    parser.add_argument('--latent_dir', type=str, required=True, help='Path to spectrogram directory (encoded_trainset)')
+    parser.add_argument('--latent_dir', type=str, default=None, help='Path to spectrogram directory (encoded_trainset)')
+    parser.add_argument('--manifest', type=str, default=None, help='Path to trainset manifest CSV (alternative to latent_dir)')
+    parser.add_argument('--use_manifest', action='store_true', help='Use manifest CSV instead of encoded latents')
     parser.add_argument('--epochs', type=int, default=20, help='Number of epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
@@ -89,11 +116,25 @@ if __name__ == '__main__':
     print("🎵 Training 2D CNN on Mel-Spectrogram Latents")
     print("=" * 70)
     
-    # Load data from all codec subdirectories
-    train_data, val_data, test_data, input_shape = load_spectrogram_latents_for_training(
-        args.latent_dir,
-        num_samples_per_class=args.samples
-    )
+    # Determine data source
+    if args.use_manifest:
+        if not args.manifest:
+            # Default manifest path
+            args.manifest = str(Path(ROOT_DIR) / "data/trainset/manifest.csv")
+        print(f"Loading from manifest: {args.manifest}\n")
+        train_data, val_data, test_data, input_shape = load_manifest_for_training(
+            args.manifest,
+            num_samples=args.samples
+        )
+    else:
+        if not args.latent_dir:
+            # Default latent directory
+            args.latent_dir = str(Path(ROOT_DIR) / "data/encoded_trainset")
+        print(f"Loading from latent directory: {args.latent_dir}\n")
+        train_data, val_data, test_data, input_shape = load_spectrogram_latents_for_training(
+            args.latent_dir,
+            num_samples_per_class=args.samples
+        )
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}\n")
@@ -202,7 +243,7 @@ if __name__ == '__main__':
     model_dir.mkdir(exist_ok=True)
     
     # Save model checkpoint
-    model_path = model_dir / "cnn_2D.pt"
+    model_path = model_dir / "cnn_uncodec.pt"
     torch.save(model.state_dict(), model_path)
     print(f"✅ Model saved to {model_path}")
     
@@ -222,7 +263,7 @@ if __name__ == '__main__':
         "device": str(device)
     }
     
-    info_path = model_dir / "training_info_2D.json"
+    info_path = model_dir / "training_info_uncodec.json"
     with open(info_path, 'w') as f:
         json.dump(training_info, f, indent=2)
     print(f"✅ Training info saved to {info_path}")

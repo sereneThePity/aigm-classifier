@@ -10,12 +10,12 @@ from preprocess import load_dataset, load_dataset_comprehensive
 from utils import ROOT_DIR, DATA_DIR
 import tensorflow as tf
 from train_cnn import SimpleCNN
-from train_cnn_2d import CNN2D
+from train_cnn_2d import CNN2D, CNN2D_Legacy
 from scipy.ndimage import zoom
 
 def is_model_2d_cnn(model):
     """Check if model is a 2D CNN."""
-    return isinstance(model, CNN2D)
+    return isinstance(model, (CNN2D, CNN2D_Legacy))
 
 def preprocess_spectrograms_for_2d_cnn(X):
     """
@@ -91,16 +91,23 @@ def load_model_auto(model_path):
             if first_conv_weight is not None:
                 if first_conv_weight.dim() == 4:  # Conv2d: [out, in, h, w]
                     print(f"Detected 2D CNN model (Conv2d with shape {first_conv_weight.shape})")
-                    model = CNN2D(input_shape, num_classes)
+                    # Try loading with current CNN2D, fall back to CNN2D_Legacy if it fails
+                    try:
+                        model = CNN2D(input_shape, num_classes)
+                        model.load_state_dict(loaded_obj)
+                    except RuntimeError as e:
+                        print(f"⚠️  CNN2D load failed, trying legacy version: {str(e)[:100]}...")
+                        model = CNN2D_Legacy(input_shape, num_classes)
+                        model.load_state_dict(loaded_obj)
+                        print(f"✅ Loaded legacy CNN2D model")
                 elif first_conv_weight.dim() == 3:  # Conv1d: [out, in, k]
                     print(f"Detected 1D CNN model (Conv1d with shape {first_conv_weight.shape})")
                     model = SimpleCNN(input_shape, num_classes)
+                    model.load_state_dict(loaded_obj)
                 else:
                     raise ValueError(f"Unknown conv layer dimension: {first_conv_weight.dim()}")
             else:
                 raise ValueError("Could not find conv1.weight in checkpoint")
-            
-            model.load_state_dict(loaded_obj)
         else:
             # It's already a full model object
             model = loaded_obj
@@ -119,7 +126,7 @@ def evaluate(model_path, manifest_path):
     if model_type == 'keras':
         X, y = load_dataset(manifest_path)
     else:
-        X, y = load_dataset_comprehensive(manifest_path)
+        X, y = load_dataset_comprehensive(manifest_path, num_samples=1000, num_workers=10)
         X = preprocess_data(X, model)
     
     if model_type == 'pytorch':
@@ -214,16 +221,24 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         print(f"✅ Extracted features from layer '{layer_name}', shape: {features.shape}")
     
     else:  # PyTorch model
-        # Use forward hook to capture intermediate activations
-        print("Loading data in batches...")
-        X, y = load_dataset_comprehensive(manifest_path, num_workers=10)
-        X = preprocess_data(X, model)
-
+        # Load manifest and process samples one-by-one
+        import csv
+        import librosa
+        
+        print("Loading manifest...")
+        manifest_data = []
+        with open(manifest_path, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                manifest_data.append(row)
+        
+        print(f"Found {len(manifest_data)} samples in manifest")
+        
         activation = {} 
         
         def get_activation(name):
             def hook(model, input, output):
-                activation[name] = output.detach().cpu()
+                activation[name] = output.detach().cpu().numpy()
             return hook
         
         if layer_name is None:
@@ -243,51 +258,117 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
                 break
         
         device = next(model.parameters()).device
-        all_features = []
-        batch_size = 10  # Reduced from 16 to minimize memory usage
         
-        print(f"Processing {len(X)} samples in batches of {batch_size}...")
+        # Pre-allocate memmap files (we'll determine shape from first sample)
+        first_pass = True
+        memmap_features = None
+        memmap_labels = None
+        memmap_specs = None
+        processed_count = 0
         
-        # Process in batches to avoid memory issues
-        for i in tqdm(range(0, len(X), batch_size), desc="Extracting features"):
-            X_batch = X[i:i+batch_size]
-            X_tensor = torch.from_numpy(X_batch).float().to(device)
-            
-            with torch.no_grad():
-                model(X_tensor)
-            
-            # Get features from activation (already on CPU from hook)
-            batch_features = activation[layer_name].numpy()
-            all_features.append(batch_features)
-            
-            # Clear activation cache and free GPU memory
-            activation[layer_name] = None
-            del X_tensor
-            torch.cuda.empty_cache()
+        print(f"Processing {len(manifest_data)} samples...")
         
-        # Concatenate all batch features
-        features = np.concatenate(all_features, axis=0)
-        print(f"✅ Extracted features from layer '{layer_name}', shape: {features.shape}")
+        # Process samples one-by-one, writing to disk incrementally
+        for sample_idx, sample_info in enumerate(tqdm(manifest_data, desc="Extracting features")):
+            filepath = sample_info.get('filepath')
+            label = int(sample_info.get('label', 0))
+            
+            if not os.path.exists(filepath):
+                continue
+            
+            try:
+                # Load and process single audio file
+                audio, sr = librosa.load(filepath, sr=44100, mono=True)
+                spec = librosa.feature.melspectrogram(y=audio, sr=44100, n_mels=128)
+                
+                # Resize to (128, 128)
+                zoom_factors = (128 / spec.shape[0], 128 / spec.shape[1])
+                spec_resized = zoom(spec, zoom_factors, order=1).astype(np.float32)
+                
+                # Add batch and channel dims: (1, 1, 128, 128)
+                spec_tensor = torch.from_numpy(spec_resized[np.newaxis, np.newaxis, :, :]).float().to(device)
+                
+                # Forward pass and extract features
+                with torch.no_grad():
+                    model(spec_tensor)
+                
+                # Get features from activation
+                feat = activation[layer_name][0]  # Remove batch dim
+                
+                # On first pass, allocate memmaps
+                if first_pass:
+                    feat_shape = (len(manifest_data),) + feat.shape
+                    memmap_features = np.memmap(save_path, dtype=np.float32, mode='w+', shape=feat_shape)
+                    memmap_labels = np.memmap(save_path.replace('.npy', '_labels.npy'), dtype=np.int32, mode='w+', shape=(len(manifest_data),))
+                    memmap_specs = np.memmap(save_path.replace('.npy', '_specs.npy'), dtype=np.float32, mode='w+', shape=(len(manifest_data), 128, 128))
+                    first_pass = False
+                
+                # Write to memmap
+                memmap_features[processed_count] = feat
+                memmap_labels[processed_count] = label
+                memmap_specs[processed_count] = spec_resized
+                
+                processed_count += 1
+                
+                # Clear GPU memory
+                del spec_tensor, feat
+                torch.cuda.empty_cache()
+                
+                # Flush to disk every 50 samples
+                if processed_count % 50 == 0:
+                    memmap_features.flush()
+                    memmap_labels.flush()
+                    memmap_specs.flush()
+                    
+            except Exception as e:
+                continue
+        
+        # Final flush and proper save
+        if memmap_features is not None:
+            memmap_features.flush()
+            memmap_labels.flush()
+            memmap_specs.flush()
+            
+            # Trim to actual processed count and save as proper numpy files
+            processed_dir = os.path.join(DATA_DIR, "processed")
+            os.makedirs(processed_dir, exist_ok=True)
+            
+            # Load the memmap data and save as proper .npy files
+            features_trimmed = np.array(memmap_features[:processed_count])
+            labels_trimmed = np.array(memmap_labels[:processed_count])
+            specs_trimmed = np.array(memmap_specs[:processed_count])
+            
+            # Save as proper numpy files
+            np.save(save_path, features_trimmed)
+            np.save(save_path.replace('.npy', '_labels.npy'), labels_trimmed)
+            np.save(save_path.replace('.npy', '_specs.npy'), specs_trimmed)
+            
+            del memmap_features, memmap_labels, memmap_specs
+        
+        print(f"✅ Extracted features from layer '{layer_name}' for {processed_count} samples")
+        print(f"💾 Features saved to {save_path}")
+        print(f"💾 Labels saved to {save_path.replace('.npy', '_labels.npy')}")
+        print(f"💾 Specs saved to {save_path.replace('.npy', '_specs.npy')}")
 
-    # Optional: flatten features if needed
-    if len(features.shape) > 2:
-        # Save spatial features before flattening (useful for SAE training)
-        spatial_path = save_path.replace(".npy", "_spatial.npy")
-        np.save(spatial_path, features)
-        print(f"✅ Saved spatial features to {spatial_path}")
-        
-        features = features.reshape((features.shape[0], -1))
-        print(f"Flattened feature shape: {features.shape}")
 
-    # Save to disk for later use
-    processed_dir = os.path.join(DATA_DIR, "processed")
-    os.makedirs(processed_dir, exist_ok=True)
-    np.save(save_path, features)
-    np.save(os.path.join(processed_dir, "y_labels"), y)
-    np.save(os.path.join(processed_dir, "X_spectograms"), X)
-    print(f"✅ Saved labels to y_labels.npy")
-    print(f"✅ Saved spectrograms to X_spectograms.npy")
-    print(f"💾 Features saved to {save_path}")
+    # Only apply flattening for Keras models (PyTorch model already saved via memmap above)
+    if model_type == 'keras':
+        # Optional: flatten features if needed
+        if len(features.shape) > 2:
+            # Save spatial features before flattening (useful for SAE training)
+            spatial_path = save_path.replace(".npy", "_spatial.npy")
+            np.save(spatial_path, features)
+            print(f"✅ Saved spatial features to {spatial_path}")
+
+        # Save to disk for later use
+        processed_dir = os.path.join(DATA_DIR, "processed")
+        os.makedirs(processed_dir, exist_ok=True)
+        np.save(save_path, features)
+        np.save(os.path.join(processed_dir, "y_labels_legacy"), y)
+        np.save(os.path.join(processed_dir, "X_spectograms_legacy"), X)
+        print(f"✅ Saved labels to y_labels.npy")
+        print(f"✅ Saved spectrograms to X_spectograms.npy")
+        print(f"💾 Features saved to {save_path}")
 
 
 if __name__ == "__main__":
