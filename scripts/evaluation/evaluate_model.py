@@ -9,8 +9,8 @@ from tqdm import tqdm
 from ..preprocessing.preprocess import load_dataset, load_dataset_comprehensive
 from ..utils.utils import ROOT_DIR, DATA_DIR
 import tensorflow as tf
-from ..models.train_cnn import SimpleCNN
-from ..models.train_cnn_2d import CNN2D, CNN2D_Legacy
+from ..training.train_cnn import SimpleCNN
+from ..training.train_cnn_2d import CNN2D, CNN2D_Legacy
 from scipy.ndimage import zoom
 
 def is_model_2d_cnn(model):

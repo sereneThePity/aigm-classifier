@@ -13,7 +13,7 @@ from pathlib import Path
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 import argparse
-from ..models.train_cnn_2d import CNN2D, CNN2D_Legacy
+from ..training.train_cnn_2d import CNN2D, CNN2D_Legacy
 
 
 
