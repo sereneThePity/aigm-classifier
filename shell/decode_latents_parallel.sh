@@ -42,7 +42,7 @@ echo -e "${BLUE}Using $NUM_WORKERS parallel workers${NC}"
 cd /home/student/s/ssahu/share/aigm-classifier
 
 # Run decoding script
-python scripts/decode_latents_to_audio.py \
+python scripts/codecs/decode_latents_to_audio.py \
     --input "$INPUT_DIR" \
     --output "$OUTPUT_DIR" \
     --sr "$SR" \

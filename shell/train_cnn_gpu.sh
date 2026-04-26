@@ -157,7 +157,7 @@ echo -e "${BLUE}    Starting Training${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
 # Run training
-CMD="python3 \"$PROJECT_ROOT/scripts/train_cnn.py\" \
+CMD="python3 \"$PROJECT_ROOT/scripts/models/train_cnn.py\" \
     --latent_dir \"$LATENT_DIR\" \
     --epochs \"$EPOCHS\" \
     --batch_size \"$BATCH_SIZE\" \

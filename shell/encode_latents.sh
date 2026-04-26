@@ -41,7 +41,7 @@ echo -e "${BLUE}Using $NUM_WORKERS workers for parallel processing${NC}"
 cd /home/student/s/ssahu/share/aigm-classifier
 
 # Run encoding script
-python scripts/encode_latents.py \
+python scripts/codecs/encode_latents.py \
     --manifest "$MANIFEST" \
     --output_dir "$OUTPUT_DIR" \
     --codecs $CODECS \

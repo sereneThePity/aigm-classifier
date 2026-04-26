@@ -182,7 +182,7 @@ echo -e "${BLUE}    Starting 2D CNN Training${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
 # Run training
-CMD="python3 \"$PROJECT_ROOT/scripts/train_cnn_2d.py\""
+CMD="python3 \"$PROJECT_ROOT/scripts/models/train_cnn_2d.py\""
 
 # Add data source arguments
 if [ "$USE_MANIFEST" = true ]; then

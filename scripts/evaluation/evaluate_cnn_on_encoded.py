@@ -13,7 +13,7 @@ from pathlib import Path
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 import argparse
-from train_cnn_2d import CNN2D, CNN2D_Legacy
+from ..models.train_cnn_2d import CNN2D, CNN2D_Legacy
 
 
 
@@ -177,7 +177,7 @@ if __name__ == "__main__":
                         help="Path to trained CNN2D model (.pt)")
     parser.add_argument("--batch_size", type=int, default=32,
                         help="Batch size for evaluation")
-    parser.add_argument("--max_per_class", type=int, default=None,
+    parser.add_argument("--max", type=int, default=None,
                         help="Max samples per class per codec (None for all)")
     args = parser.parse_args()
     
@@ -188,12 +188,12 @@ if __name__ == "__main__":
     print(f"📁 Loading pre-computed spectrograms from {args.encoded_dir}")
     X, y = load_and_extract_spectrograms(
         args.encoded_dir,
-        max_per_class=args.max_per_class
+        max_per_class=args.max
     )
     
     # Load model
     print(f"📂 Loading model from {args.model}")
-    model = CNN2D_Legacy(input_shape=(1, 128, 128), num_classes=2)
+    model = CNN2D(input_shape=(1, 128, 128), num_classes=2)
     model.load_state_dict(torch.load(args.model, map_location=device))
     model = model.to(device)
     print("✅ Model loaded\n")

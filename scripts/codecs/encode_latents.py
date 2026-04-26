@@ -13,8 +13,8 @@ import pandas as pd
 from multiprocessing import Pool, Manager
 import os
 from functools import partial
-from utils import normalize_audio, apply_highpass_filter
-from neural_codec_confounders import MetaEnCodecWrapper, DACWrapper, AudioLMCodecWrapper, VALLECodecWrapper, GriffinMelCodec
+from ..utils.utils import normalize_audio, apply_highpass_filter
+from ..utils.neural_codec_confounders import MetaEnCodecWrapper, DACWrapper, AudioLMCodecWrapper, VALLECodecWrapper, GriffinMelCodec
 
 CODECS = {
     "encodec": MetaEnCodecWrapper,

@@ -5,7 +5,7 @@ import argparse
 import random
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from utils import ROOT_DIR, DATA_DIR
+from ..utils.utils import ROOT_DIR, DATA_DIR
 
 def scan_audio_files(root_dir, exts=(".wav", ".mp3", ".flac", ".ogg", ".m4a"), sample_type="both"):
     """Return dictionary mapping top-level source dirs to list of files."""

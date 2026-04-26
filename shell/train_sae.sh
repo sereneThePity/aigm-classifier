@@ -182,7 +182,7 @@ echo -e "${BLUE}    Starting SAE Training${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
 # Run training
-CMD="python \"$PROJECT_ROOT/scripts/train_topk_sae.py\" \
+CMD="python \"$PROJECT_ROOT/scripts/models/train_topk_sae.py\" \
     --patch_size \"$PATCH_SIZE\" \
     --nb_concepts \"$NB_CONCEPTS\" \
     --top_k \"$TOP_K\" \

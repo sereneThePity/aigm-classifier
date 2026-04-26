@@ -6,11 +6,11 @@ import torch
 import argparse
 from pathlib import Path
 from tqdm import tqdm
-from preprocess import load_dataset, load_dataset_comprehensive
-from utils import ROOT_DIR, DATA_DIR
+from ..preprocessing.preprocess import load_dataset, load_dataset_comprehensive
+from ..utils.utils import ROOT_DIR, DATA_DIR
 import tensorflow as tf
-from train_cnn import SimpleCNN
-from train_cnn_2d import CNN2D, CNN2D_Legacy
+from ..models.train_cnn import SimpleCNN
+from ..models.train_cnn_2d import CNN2D, CNN2D_Legacy
 from scipy.ndimage import zoom
 
 def is_model_2d_cnn(model):
@@ -219,6 +219,16 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         # Compute activations
         features = feature_extractor.predict(X, batch_size=32, verbose=1)
         print(f"✅ Extracted features from layer '{layer_name}', shape: {features.shape}")
+        
+        # Calculate accuracy
+        preds = model.predict(X, batch_size=32, verbose=0)
+        if preds.ndim > 1 and preds.shape[1] > 1:
+            preds_bin = np.argmax(preds, axis=1)
+        else:
+            preds_bin = (preds.flatten() > 0.5).astype(int)
+        
+        accuracy = np.mean(preds_bin == y)
+        print(f"✅ Accuracy on extracted samples: {accuracy*100:.2f}%")
     
     else:  # PyTorch model
         # Load manifest and process samples one-by-one
@@ -259,7 +269,7 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         
         device = next(model.parameters()).device
         
-        # Pre-allocate memmap files (we'll determine shape from first sample)
+        # Pre-allocate memmap files for incremental writing
         first_pass = True
         memmap_features = None
         memmap_labels = None
@@ -280,10 +290,14 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
                 # Load and process single audio file
                 audio, sr = librosa.load(filepath, sr=44100, mono=True)
                 spec = librosa.feature.melspectrogram(y=audio, sr=44100, n_mels=128)
+                spec = librosa.power_to_db(spec, ref=np.max)  # Convert to dB scale
                 
                 # Resize to (128, 128)
                 zoom_factors = (128 / spec.shape[0], 128 / spec.shape[1])
                 spec_resized = zoom(spec, zoom_factors, order=1).astype(np.float32)
+                
+                # Normalize spectrogram
+                spec_resized = (spec_resized - spec_resized.mean()) / (spec_resized.std() + 1e-7)
                 
                 # Add batch and channel dims: (1, 1, 128, 128)
                 spec_tensor = torch.from_numpy(spec_resized[np.newaxis, np.newaxis, :, :]).float().to(device)
@@ -314,8 +328,8 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
                 del spec_tensor, feat
                 torch.cuda.empty_cache()
                 
-                # Flush to disk every 50 samples
-                if processed_count % 50 == 0:
+                # Flush to disk every 100 samples
+                if processed_count % 100 == 0:
                     memmap_features.flush()
                     memmap_labels.flush()
                     memmap_specs.flush()
@@ -323,35 +337,59 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
             except Exception as e:
                 continue
         
-        # Final flush and proper save
+        # Final flush and convert to proper numpy files (single save)
         if memmap_features is not None:
             memmap_features.flush()
             memmap_labels.flush()
             memmap_specs.flush()
             
-            # Trim to actual processed count and save as proper numpy files
-            processed_dir = os.path.join(DATA_DIR, "processed")
-            os.makedirs(processed_dir, exist_ok=True)
-            
-            # Load the memmap data and save as proper .npy files
+            # Load the trimmed memmap data and save as proper .npy files
             features_trimmed = np.array(memmap_features[:processed_count])
             labels_trimmed = np.array(memmap_labels[:processed_count])
             specs_trimmed = np.array(memmap_specs[:processed_count])
             
-            # Save as proper numpy files
+            # Save as proper numpy files (overwriting the memmap files)
             np.save(save_path, features_trimmed)
             np.save(save_path.replace('.npy', '_labels.npy'), labels_trimmed)
             np.save(save_path.replace('.npy', '_specs.npy'), specs_trimmed)
             
+            # Calculate accuracy on extracted samples (in batches to avoid OOM)
+            batch_size = 256
+            all_preds = []
+            
+            for batch_idx in range(0, processed_count, batch_size):
+                batch_end = min(batch_idx + batch_size, processed_count)
+                batch_specs = specs_trimmed[batch_idx:batch_end]
+                
+                specs_tensor = torch.from_numpy(batch_specs[:, np.newaxis, :, :]).float().to(device)
+                with torch.no_grad():
+                    batch_preds = model(specs_tensor).cpu().numpy()
+                all_preds.append(batch_preds)
+                
+                del specs_tensor
+                torch.cuda.empty_cache()
+            
+            preds = np.concatenate(all_preds, axis=0)
+            
+            # Handle multi-class output: take argmax
+            if preds.ndim > 1 and preds.shape[1] > 1:
+                preds_bin = np.argmax(preds, axis=1)
+            else:
+                preds_bin = (preds.flatten() > 0.5).astype(int)
+            
+            accuracy = np.mean(preds_bin == labels_trimmed)
+            
+            # Clean up memmap files
             del memmap_features, memmap_labels, memmap_specs
-        
-        print(f"✅ Extracted features from layer '{layer_name}' for {processed_count} samples")
-        print(f"💾 Features saved to {save_path}")
-        print(f"💾 Labels saved to {save_path.replace('.npy', '_labels.npy')}")
-        print(f"💾 Specs saved to {save_path.replace('.npy', '_specs.npy')}")
+            
+            print(f"✅ Extracted features from layer '{layer_name}' for {processed_count} samples")
+            print(f"✅ Accuracy on extracted samples: {accuracy*100:.2f}%")
+            print(f"💾 Features saved to {save_path}")
+            print(f"💾 Labels saved to {save_path.replace('.npy', '_labels.npy')}")
+            print(f"💾 Specs saved to {save_path.replace('.npy', '_specs.npy')}")
 
 
-    # Only apply flattening for Keras models (PyTorch model already saved via memmap above)
+    # Only apply flattening for Keras models
     if model_type == 'keras':
         # Optional: flatten features if needed
         if len(features.shape) > 2:

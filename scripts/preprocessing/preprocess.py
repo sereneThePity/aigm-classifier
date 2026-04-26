@@ -6,88 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 from typing import Optional, Tuple
-from utils import normalize_spectrogram, normalize_audio, apply_highpass_filter
-
-
-class SpectrogramDataset(torch.utils.data.Dataset):
-    """Memory-efficient dataset that computes spectrograms on-the-fly."""
-    
-    def __init__(self, manifest_path, split_indices=None, sr=44100, segment_duration=5.0, 
-                 target_loudness=-20.0, hp_freq=20):
-        """
-        Args:
-            manifest_path: Path to CSV manifest with 'filepath' and 'label' columns
-            split_indices: Indices to use for this split (None = use all)
-            sr: Sample rate for resampling
-            segment_duration: Audio segment duration in seconds
-            target_loudness: Target loudness in dB
-            hp_freq: Highpass filter cutoff frequency
-        """
-        self.df = pd.read_csv(manifest_path)
-        if split_indices is not None:
-            self.df = self.df.iloc[split_indices].reset_index(drop=True)
-        
-        self.sr = sr
-        self.segment_duration = segment_duration
-        self.target_loudness = target_loudness
-        self.hp_freq = hp_freq
-    
-    def __len__(self):
-        return len(self.df)
-    
-    def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        file_path = row['filepath']
-        label = int(row['label'])
-        
-        # Load and preprocess audio on-the-fly
-        audio = self._load_and_preprocess(file_path)
-        
-        # Compute spectrogram
-        spec = librosa.feature.melspectrogram(y=audio, sr=self.sr, n_mels=128)
-        spec_db = librosa.power_to_db(spec, ref=np.max)
-        
-        # Add channel dimension and normalize
-        spec_db = np.expand_dims(spec_db, axis=0).astype(np.float32)
-        spec_db = (spec_db - spec_db.mean()) / (spec_db.std() + 1e-7)
-        
-        return torch.from_numpy(spec_db).float(), torch.tensor(label, dtype=torch.long)
-    
-    def _load_and_preprocess(self, file_path):
-        """Load and preprocess audio following the standard pipeline."""
-        try:
-            import warnings
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore")
-                y, loaded_sr = librosa.load(file_path, sr=None, mono=True)
-            
-            # Resample
-            if loaded_sr != self.sr:
-                y = librosa.resample(y, orig_sr=loaded_sr, target_sr=self.sr)
-            
-            # Loudness normalize
-            y = normalize_audio(y, method='db', target=self.target_loudness)
-            
-            # Trim silence
-            y, _ = librosa.effects.trim(y, top_db=40)
-            
-            # Random crop to fixed-length segment
-            segment_samples = int(self.segment_duration * self.sr)
-            if len(y) >= segment_samples:
-                max_start = len(y) - segment_samples
-                start_idx = np.random.randint(0, max_start + 1)
-                y = y[start_idx:start_idx + segment_samples]
-            else:
-                pad_width = segment_samples - len(y)
-                y = np.pad(y, (0, pad_width), mode='constant')
-            
-            # High-pass filter
-            y = apply_highpass_filter(y, self.sr, cutoff_freq=self.hp_freq)
-            
-            return y
-        except Exception:
-            # Return silence on error
-            return np.zeros(int(self.segment_duration * self.sr))
+from ..utils.utils import normalize_spectrogram, normalize_audio, apply_highpass_filter
 
 
 # ===== Audio Preprocessing =====
@@ -270,11 +189,12 @@ def load_manifest_for_training(
     num_samples=None,
     test_split=0.15,
     val_split=0.15,
-    random_state=42
+    random_state=42,
+    num_workers=None
 ):
     """
     Load spectrograms from manifest CSV and prepare train/val/test datasets.
-    Uses streaming dataset (SpectrogramDataset) to avoid loading all spectrograms into memory.
+    Uses load_dataset_comprehensive for proper audio preprocessing.
     
     Args:
         manifest_path: Path to manifest CSV with 'filepath' and 'label' columns
@@ -282,45 +202,50 @@ def load_manifest_for_training(
         test_split: Test set fraction
         val_split: Validation set fraction
         random_state: Random seed for reproducibility
+        num_workers: Number of worker processes for multiprocessing
     
     Returns:
-        train_dataset, val_dataset, test_dataset: SpectrogramDataset objects
+        train_dataset, val_dataset, test_dataset: TensorDataset objects
         input_shape: Shape of input features (1, 128, mel_bins)
     """
     from sklearn.model_selection import train_test_split
     
-    # Read manifest to get indices
-    df = pd.read_csv(manifest_path)
-    if num_samples is not None:
-        df = df.sample(n=min(num_samples, len(df)), random_state=random_state)
+    # Load spectrograms from manifest with preprocessing
+    X, y = load_dataset_comprehensive(manifest_path, num_samples, num_workers)
     
-    print(f"Found {len(df)} samples in manifest")
+    print(f"Loaded shape: {X.shape}")
     
-    # Get labels for stratified split
-    labels = df['label'].values
-    all_indices = np.arange(len(df))
+    # Add channel dimension: (N, 128, mel_bins) → (N, 1, 128, mel_bins)
+    if X.ndim == 3:
+        X = np.expand_dims(X, axis=1)
     
-    # Split indices
-    train_idx, temp_idx, _, temp_labels = train_test_split(
-        all_indices, labels, test_size=test_split + val_split,
-        random_state=random_state, stratify=labels
+    # Split data
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        X, y, test_size=test_split + val_split,
+        random_state=random_state, stratify=y
     )
-    val_idx, test_idx, _, _ = train_test_split(
-        temp_idx, temp_labels, test_size=test_split / (test_split + val_split),
-        random_state=random_state, stratify=temp_labels
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp, y_temp, test_size=test_split / (test_split + val_split),
+        random_state=random_state, stratify=y_temp
     )
     
-    print(f"Split: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}\n")
+    # Convert to torch
+    train_dataset = torch.utils.data.TensorDataset(
+        torch.from_numpy(X_train).float(),
+        torch.from_numpy(y_train).long()
+    )
+    val_dataset = torch.utils.data.TensorDataset(
+        torch.from_numpy(X_val).float(),
+        torch.from_numpy(y_val).long()
+    )
+    test_dataset = torch.utils.data.TensorDataset(
+        torch.from_numpy(X_test).float(),
+        torch.from_numpy(y_test).long()
+    )
     
-    # Create streaming datasets
-    train_dataset = SpectrogramDataset(manifest_path, split_indices=train_idx)
-    val_dataset = SpectrogramDataset(manifest_path, split_indices=val_idx)
-    test_dataset = SpectrogramDataset(manifest_path, split_indices=test_idx)
+    print(f"Split: train={len(y_train)}, val={len(y_val)}, test={len(y_test)}\n")
     
-    # Input shape for model (1, 128, mel_bins)
-    input_shape = (1, 128, 128)
-    
-    return train_dataset, val_dataset, test_dataset, input_shape
+    return train_dataset, val_dataset, test_dataset, X_train.shape[1:]
 
 
 

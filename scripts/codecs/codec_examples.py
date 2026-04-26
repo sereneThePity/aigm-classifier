@@ -13,9 +13,9 @@ from pathlib import Path
 import json
 
 # Import your preprocessing utilities
-from preprocess import load_dataset_comprehensive, load_and_prep_audio
-from neural_codec_confounders import NeuralCodecConfounder, get_available_codecs
-from utils import normalize_audio
+from ..preprocessing.preprocess import load_dataset_comprehensive, load_and_prep_audio
+from ..utils.neural_codec_confounders import NeuralCodecConfounder, get_available_codecs
+from ..utils.utils import normalize_audio
 
 
 def example_1_check_available_codecs():
