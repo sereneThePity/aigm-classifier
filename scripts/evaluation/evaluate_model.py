@@ -1,4 +1,11 @@
 import os
+from pathlib import Path
+
+from scripts.preprocessing.preprocess import load_dataset, load_dataset_comprehensive
+from scripts.utils.utils import ROOT_DIR, DATA_DIR
+from scripts.training.train_cnn import SimpleCNN
+from scripts.training.train_cnn_2d import CNN2D, CNN2D_Legacy
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logs
 
 import numpy as np
@@ -6,11 +13,7 @@ import torch
 import argparse
 from pathlib import Path
 from tqdm import tqdm
-from ..preprocessing.preprocess import load_dataset, load_dataset_comprehensive
-from ..utils.utils import ROOT_DIR, DATA_DIR
 import tensorflow as tf
-from ..training.train_cnn import SimpleCNN
-from ..training.train_cnn_2d import CNN2D, CNN2D_Legacy
 from scipy.ndimage import zoom
 
 def is_model_2d_cnn(model):

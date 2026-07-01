@@ -8,8 +8,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from ..utils.utils import ROOT_DIR
-from ..preprocessing.preprocess import load_spectrogram_latents_for_training, load_manifest_for_training
+from scripts.utils.utils import ROOT_DIR
+from scripts.preprocessing.preprocess import load_spectrogram_latents_for_training, load_manifest_for_training
 
 
 class CNN2D_Legacy(nn.Module):

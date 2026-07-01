@@ -23,7 +23,7 @@ except ImportError:
     print("ERROR: overcomplete library not found. Install with: pip install overcomplete")
     exit(1)
 
-from ..utils.utils import ROOT_DIR, DATA_DIR
+from scripts.utils.utils import ROOT_DIR, DATA_DIR
 
 
 class TopKSAE:

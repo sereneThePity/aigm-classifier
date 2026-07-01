@@ -6,7 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 from typing import Optional, Tuple
-from ..utils.utils import normalize_spectrogram, normalize_audio, apply_highpass_filter
+from scripts.utils.utils import normalize_spectrogram, normalize_audio, apply_highpass_filter
 
 
 # ===== Audio Preprocessing =====

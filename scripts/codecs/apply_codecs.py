@@ -27,7 +27,7 @@ from tqdm import tqdm
 import json
 from datetime import datetime
 
-from ..utils.neural_codec_confounders import NeuralCodecConfounder, get_available_codecs
+from scripts.utils.neural_codec_confounders import NeuralCodecConfounder, get_available_codecs
 
 
 class CodecApplier:

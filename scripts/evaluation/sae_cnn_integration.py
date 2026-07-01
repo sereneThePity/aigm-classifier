@@ -14,9 +14,9 @@ from pathlib import Path
 from collections import defaultdict
 import joblib
 
-from ..training.train_cnn_2d import CNN2D
-from ..training.train_topk_sae import TopKSAE
-from ..utils.utils import ROOT_DIR, DATA_DIR
+from scripts.training.train_cnn_2d import CNN2D
+from scripts.training.train_topk_sae import TopKSAE
+from scripts.utils.utils import ROOT_DIR, DATA_DIR
 
 
 class SAECNNIntegration:
