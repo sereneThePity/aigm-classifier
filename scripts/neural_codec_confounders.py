@@ -37,7 +37,7 @@ except ImportError:
 class BaseCodec(nn.Module):
     """Base class for audio codecs."""
     
-    def __init__(self, sr: int = 44100):
+    def __init__(self, sr: int = 22500):
         super().__init__()
         self.sr = sr
     
@@ -59,7 +59,7 @@ class BaseCodec(nn.Module):
 class MetaEnCodecWrapper(BaseCodec):
     """Meta's EnCodec implementation."""
     
-    def __init__(self, sr: int = 44100, bandwidth: float = 1.5):
+    def __init__(self, sr: int = 22500, bandwidth: float = 1.5):
         """
         Initialize Meta EnCodec.
         
@@ -204,7 +204,7 @@ class DACWrapper(BaseCodec):
 class AudioLMCodecWrapper(BaseCodec):
     """AudioLM codec tokenizer simulation."""
     
-    def __init__(self, sr: int = 44100, num_tokens: int = 1024):
+    def __init__(self, sr: int = 22500, num_tokens: int = 1024):
         """
         Initialize AudioLM codec approximation.
         
@@ -260,7 +260,7 @@ class AudioLMCodecWrapper(BaseCodec):
 class VALLECodecWrapper(BaseCodec):
     """VALL-E codec tokenizer simulation."""
     
-    def __init__(self, sr: int = 44100, num_quantizers: int = 8, num_tokens: int = 512):
+    def __init__(self, sr: int = 22500, num_quantizers: int = 8, num_tokens: int = 512):
         """
         Initialize VALL-E codec approximation.
         Uses hierarchical quantization similar to VALL-E.
@@ -340,7 +340,7 @@ class VALLECodecWrapper(BaseCodec):
 class GriffinMelCodec(BaseCodec):
     """Simplified Griffin-Mel codec."""
     
-    def __init__(self, sr: int = 44100, n_mels: int = 128, n_fft: int = 2048):
+    def __init__(self, sr: int = 22500, n_mels: int = 128, n_fft: int = 2048):
         """
         Initialize Griffin-Mel codec.
         
@@ -398,7 +398,7 @@ class NeuralCodecConfounder:
     Manages application of neural codec confounders to audio files.
     """
     
-    def __init__(self, sr: int = 44100, init_only: Optional[str] = None, device_type: str = 'gpu'):
+    def __init__(self, sr: int = 22500, init_only: Optional[str] = None, device_type: str = 'gpu'):
         """
         Initialize confounder manager.
         
@@ -477,8 +477,8 @@ class NeuralCodecConfounder:
     
     def _init_dac(self):
         """Helper to initialize DAC codec."""
-        if self.sr in [16000, 44100]:
-            model_name = "44khz" if self.sr == 44100 else "16khz"
+        if self.sr in [16000, 22500]:
+            model_name = "44khz" if self.sr == 22500 else "16khz"
             return DACWrapper(sr=self.sr, model_name=model_name)
         raise ValueError(f"DAC doesn't support sample rate {self.sr}")
     
@@ -553,7 +553,7 @@ class NeuralCodecConfounder:
 
 
 # Convenience functions
-def apply_neural_codec(audio: np.ndarray, codec_name: str, sr: int = 44100) -> np.ndarray:
+def apply_neural_codec(audio: np.ndarray, codec_name: str, sr: int = 22500) -> np.ndarray:
     """
     Quick function to apply a single codec to audio.
     
@@ -570,7 +570,7 @@ def apply_neural_codec(audio: np.ndarray, codec_name: str, sr: int = 44100) -> n
     return processed if processed is not None else audio
 
 
-def get_available_codecs(sr: int = 44100, device_type: str = 'gpu') -> List[str]:
+def get_available_codecs(sr: int = 22500, device_type: str = 'gpu') -> List[str]:
     """Get list of available codecs.
     
     Args:

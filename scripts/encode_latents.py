@@ -30,7 +30,7 @@ GPU_CODECS = {"encodec", "dac"}
 
 def preprocess_audio(
     file_path,
-    sr=44100,
+    sr=22050,
     segment_duration=5.0,
     target_loudness=-20.0,
     hp_freq=20
@@ -143,7 +143,7 @@ def process_codec_worker(codec_name, df, output_dir, CODECS, codec_kwargs=None):
     
     # Load codec in this process
     codec_class = CODECS[codec_name]
-    codec = codec_class(sr=44100, **kwargs)
+    codec = codec_class(sr=22500, **kwargs)
     
     # Only call eval() if codec has a model attribute (PyTorch models)
     if hasattr(codec, 'model'):
