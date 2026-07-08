@@ -117,11 +117,13 @@ if __name__ == '__main__':
     print("=" * 70)
     
     # Determine data source
+    data_source = None
     if args.use_manifest:
         if not args.manifest:
             # Default manifest path
             args.manifest = str(Path(ROOT_DIR) / "data/trainset/manifest.csv")
         print(f"Loading from manifest: {args.manifest}\n")
+        data_source = args.manifest
         train_data, val_data, test_data, input_shape = load_manifest_for_training(
             args.manifest,
             num_samples=args.samples
@@ -131,6 +133,7 @@ if __name__ == '__main__':
             # Default latent directory
             args.latent_dir = str(Path(ROOT_DIR) / "data/encoded_trainset")
         print(f"Loading from latent directory: {args.latent_dir}\n")
+        data_source = args.latent_dir
         train_data, val_data, test_data, input_shape = load_spectrogram_latents_for_training(
             args.latent_dir,
             num_samples_per_class=args.samples
@@ -243,7 +246,7 @@ if __name__ == '__main__':
     model_dir.mkdir(exist_ok=True)
     
     # Save model checkpoint
-    model_path = model_dir / "cnn_uncodec.pt"
+    model_path = model_dir / "CNN_manifest.pt"
     torch.save(model.state_dict(), model_path)
     print(f"✅ Model saved to {model_path}")
     
@@ -251,6 +254,8 @@ if __name__ == '__main__':
     training_info = {
         "model": "CNN2D",
         "input_shape": input_shape,
+        "data_source": data_source,
+        "num_training_samples": len(train_data),
         "epochs_trained": epoch + 1,
         "batch_size": args.batch_size,
         "learning_rate": args.lr,
@@ -263,7 +268,7 @@ if __name__ == '__main__':
         "device": str(device)
     }
     
-    info_path = model_dir / "training_info_uncodec.json"
+    info_path = model_dir / "training_info_manifest.json"
     with open(info_path, 'w') as f:
         json.dump(training_info, f, indent=2)
     print(f"✅ Training info saved to {info_path}")

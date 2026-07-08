@@ -121,12 +121,12 @@ def load_model_auto(model_path):
     else:
         raise ValueError(f"Unsupported model format: {model_path}. Use .pt (PyTorch) or .keras (Keras)")
 
-def evaluate(model_path, manifest_path):
+def evaluate(model_path, manifest_path, n_samples=1000):
     model, model_type = load_model_auto(model_path)
     if model_type == 'keras':
         X, y = load_dataset(manifest_path)
     else:
-        X, y = load_dataset_comprehensive(manifest_path, num_samples=1000, num_workers=10)
+        X, y = load_dataset_comprehensive(manifest_path, num_samples=n_samples, num_workers=10)
         X = preprocess_data(X, model)
     
     if model_type == 'pytorch':
@@ -280,10 +280,10 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
                 # Load and process single audio file
                 audio, sr = librosa.load(filepath, sr=44100, mono=True)
                 spec = librosa.feature.melspectrogram(y=audio, sr=44100, n_mels=128)
-                
+                spec_db = librosa.power_to_db(spec, ref=np.max)
                 # Resize to (128, 128)
-                zoom_factors = (128 / spec.shape[0], 128 / spec.shape[1])
-                spec_resized = zoom(spec, zoom_factors, order=1).astype(np.float32)
+                zoom_factors = (128 / spec_db.shape[0], 128 / spec_db.shape[1])
+                spec_resized = zoom(spec_db, zoom_factors, order=1).astype(np.float32)
                 
                 # Add batch and channel dims: (1, 1, 128, 128)
                 spec_tensor = torch.from_numpy(spec_resized[np.newaxis, np.newaxis, :, :]).float().to(device)
@@ -379,6 +379,7 @@ if __name__ == "__main__":
     eval_parser = subparsers.add_parser('evaluate', help='Evaluate model without transforms')
     eval_parser.add_argument('--model_path', required=True, help='Path to the model')
     eval_parser.add_argument('--manifest_path', required=True, help='Path to the manifest CSV')
+    eval_parser.add_argument('--n_samples', type=int, default=1000, help='Number of samples to evaluate (for PyTorch models)')
 
     # Subparser for evaluate_with_transform
     eval_trans_parser = subparsers.add_parser('evaluate_transform', help='Evaluate model with transforms')
@@ -399,7 +400,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.command == 'evaluate':
-        evaluate(args.model_path, args.manifest_path)
+        evaluate(args.model_path, args.manifest_path, args.n_samples)
     elif args.command == 'evaluate_transform':
         target_shape = (args.freq, args.time)
         evaluate_with_transform(args.model_path, args.manifest_path, args.n_mels, target_shape, args.transform)
