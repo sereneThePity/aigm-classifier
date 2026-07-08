@@ -278,8 +278,8 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
             
             try:
                 # Load and process single audio file
-                audio, sr = librosa.load(filepath, sr=44100, mono=True)
-                spec = librosa.feature.melspectrogram(y=audio, sr=44100, n_mels=128)
+                audio, sr = librosa.load(filepath, sr=22050, mono=True)
+                spec = librosa.feature.melspectrogram(y=audio, sr=22050, n_mels=128)
                 spec_db = librosa.power_to_db(spec, ref=np.max)
                 # Resize to (128, 128)
                 zoom_factors = (128 / spec_db.shape[0], 128 / spec_db.shape[1])

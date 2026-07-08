@@ -19,12 +19,12 @@ from scipy.io import wavfile
 # -----------------------------
 # Basic I/O
 # -----------------------------
-def load_audio(path, sr=44100, duration=None):
+def load_audio(path, sr=22050, duration=None):
     """Load audio file and resample."""
     y, sr = librosa.load(path, sr=sr, duration=duration, mono=False)
     return y, sr
 
-def save_audio(path, y, sr=44100):
+def save_audio(path, y, sr=22050):
     """Save numpy audio array to a file."""
     sf.write(path, y, sr)
 
@@ -89,14 +89,14 @@ def pitch_shift(y, sr, n_steps):
     """Pitch-shift audio ± semitones."""
     return librosa.effects.pitch_shift(y, sr=sr, n_steps=n_steps)
 
-def reverb(y, decay=0.5):
+def reverb(y, decay=0.5, sr=22050):
     """Add a simple reverberation via convolution."""
-    ir = np.zeros(int(0.3 * 44100))
+    ir = np.zeros(int(0.3 * sr))
     ir[0] = 1.0
-    ir[int(0.02 * 44100)] = decay
+    ir[int(0.02 * sr)] = decay
     return convolve(y, ir, mode='full')[:len(y)]
 
-def equalize(y, gain_db=6, freq=1000, sr=44100):
+def equalize(y, gain_db=6, freq=1000, sr=22050):
     """Simple parametric EQ boost around freq."""
     Q = 1.0
     w0 = 2 * np.pi * freq / sr
@@ -143,7 +143,7 @@ def embed_with_silence(y, sr, pre_silence=2.0, post_silence=2.0):
 def apply_transform(y, sr, transform="random"):
     """Apply the give transform for stress testing."""
     transforms = {
-        "resample": lambda: librosa.resample(y, orig_sr=sr, target_sr=random.choice([8000, 16000, 44100])),
+        "resample": lambda: librosa.resample(y, orig_sr=sr, target_sr=random.choice([8000, 16000, 22050])),
         "downmix": lambda: downmix_to_mono(y),
         "upmix": lambda: upmix_to_stereo(y),
         "reencode": lambda: reencode(y, sr, codec=random.choice(["mp3", "ogg"]), bitrate=random.choice(["64k", "96k", "128k"]))[0],
