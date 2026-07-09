@@ -1,20 +1,24 @@
 #!/bin/bash
 
-#SBATCH --job-name="CNN2D-Audio-Classifier"
+#SBATCH --job-name="CNN2D-Spectrogram-Classifier"
 #SBATCH --time=24:00:00
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
+#SBATCH --dependency=afterok:11542283
 #SBATCH --cpus-per-task=40
 #SBATCH --gres=gpu:A100:1
 #SBATCH --mail-type=NONE
 #SBATCH --output=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.out
 #SBATCH --error=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.err
 
-# SLURM Script to train 2D CNN classifier using GPU on HPC
-# Submit with: sbatch train_cnn_gpu.sh [options]
-# Monitor with: squeue -u $USER
+# SLURM Script to train 2D CNN classifier
+# Usage: sbatch train_cnn_gpu.sh [--use_cached] [--epochs N] [--batch_size N] [--lr LR]
+#
+# Approaches:
+#   Default: Neural codec latents (encodec, dac, etc.)
+#   --use_cached: Pre-computed spectrograms (fastest, no codec bias)
 
-set -e  # Exit on any error
+set -e
 
 # Color codes for output
 RED='\033[0;31m'
@@ -23,14 +27,13 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Default parameters (2D-specific)
+# Default parameters
 EPOCHS=50
 BATCH_SIZE=32
 LEARNING_RATE=0.001
-SAMPLES=
-USE_MANIFEST=false
+USE_CACHED=false
 LATENT_DIR="/home/student/s/ssahu/share/aigm-classifier/data/encoded_trainset"
-MANIFEST_PATH="/home/student/s/ssahu/share/aigm-classifier/data/trainset/manifest.csv"
+CACHED_MANIFEST="/home/student/s/ssahu/share/aigm-classifier/data/cached_spectrograms/manifest.csv"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -47,20 +50,16 @@ while [[ $# -gt 0 ]]; do
             LEARNING_RATE="$2"
             shift 2
             ;;
-        --samples)
-            SAMPLES="$2"
-            shift 2
-            ;;
-        --use_manifest)
-            USE_MANIFEST=true
+        --use_cached)
+            USE_CACHED=true
             shift
-            ;;
-        --manifest)
-            MANIFEST_PATH="$2"
-            shift 2
             ;;
         --latent_dir)
             LATENT_DIR="$2"
+            shift 2
+            ;;
+        --cached_manifest)
+            CACHED_MANIFEST="$2"
             shift 2
             ;;
         *)
@@ -97,7 +96,7 @@ fi
 echo -e "${GREEN}✓ Conda environment 'music' activated${NC}"
 
 echo -e "\n${BLUE}============================================================${NC}"
-echo -e "${BLUE}    HPC 2D CNN Training with SLURM + GPU${NC}"
+echo -e "${BLUE}    HPC 2D CNN Classifier Training${NC}"
 echo -e "${BLUE}============================================================${NC}"
 echo ""
 echo -e "${YELLOW}SLURM Job Information:${NC}"
@@ -132,15 +131,12 @@ else:
 }
 
 # Verify data source path exists
-if [ "$USE_MANIFEST" = true ]; then
-    if [ -z "$MANIFEST_PATH" ]; then
-        MANIFEST_PATH="$PROJECT_ROOT/data/trainset/manifest.csv"
-    fi
-    if [ ! -f "$MANIFEST_PATH" ]; then
-        echo -e "${RED}❌ Error: Manifest file not found at $MANIFEST_PATH${NC}"
+if [ "$USE_CACHED" = true ]; then
+    if [ ! -f "$CACHED_MANIFEST" ]; then
+        echo -e "${RED}❌ Error: Cached manifest not found at $CACHED_MANIFEST${NC}"
         exit 1
     fi
-    echo -e "${GREEN}✓ Manifest file found${NC}"
+    echo -e "${GREEN}✓ Cached spectrogram manifest found${NC}"
 else
     if [ ! -d "$LATENT_DIR" ]; then
         echo -e "${RED}❌ Error: Latent directory not found at $LATENT_DIR${NC}"
@@ -161,12 +157,11 @@ echo -e "\n${YELLOW}[*] Training Parameters:${NC}"
 echo "    Epochs:            $EPOCHS"
 echo "    Batch Size:        $BATCH_SIZE"
 echo "    Learning Rate:     $LEARNING_RATE"
-echo "    Samples:           ${SAMPLES:-all}"
-if [ "$USE_MANIFEST" = true ]; then
-    echo "    Data Source:       Manifest CSV"
-    echo "    Manifest Path:     $MANIFEST_PATH"
+if [ "$USE_CACHED" = true ]; then
+    echo "    Mode:              Cached Spectrograms (no codec bias)"
+    echo "    Manifest:          $CACHED_MANIFEST"
 else
-    echo "    Data Source:       Encoded Latents"
+    echo "    Mode:              Neural Codec Latents"
     echo "    Latent Dir:        $LATENT_DIR"
 fi
 echo -e "    Log File:          $LOG_FILE"
@@ -184,22 +179,14 @@ echo -e "${BLUE}============================================================${NC
 CMD="python3 \"$PROJECT_ROOT/scripts/train_cnn_2d.py\""
 
 # Add data source arguments
-if [ "$USE_MANIFEST" = true ]; then
-    CMD="$CMD --use_manifest"
-    if [ -n "$MANIFEST_PATH" ]; then
-        CMD="$CMD --manifest \"$MANIFEST_PATH\""
-    fi
+if [ "$USE_CACHED" = true ]; then
+    CMD="$CMD --use_cached --cached_manifest \"$CACHED_MANIFEST\""
 else
     CMD="$CMD --latent_dir \"$LATENT_DIR\""
 fi
 
 # Add training parameters
 CMD="$CMD --epochs \"$EPOCHS\" --batch_size \"$BATCH_SIZE\" --lr \"$LEARNING_RATE\""
-
-# Add samples argument if specified
-if [ -n "$SAMPLES" ]; then
-    CMD="$CMD --samples \"$SAMPLES\""
-fi
 
 eval "$CMD" 2>&1 | tee "$LOG_FILE"
 

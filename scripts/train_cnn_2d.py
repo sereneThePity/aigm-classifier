@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utils import ROOT_DIR
-from preprocess import load_spectrogram_latents_for_training, load_manifest_for_training
+from preprocess import load_spectrogram_latents_for_training, load_cached_spectrograms_for_training, collate_fn_skip_none
 
 
 class CNN2D_Legacy(nn.Module):
@@ -102,37 +102,39 @@ class CNN2D(nn.Module):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Train 2D CNN on mel-spectrogram latents")
-    parser.add_argument('--latent_dir', type=str, default=None, help='Path to spectrogram directory (encoded_trainset)')
-    parser.add_argument('--manifest', type=str, default=None, help='Path to trainset manifest CSV (alternative to latent_dir)')
-    parser.add_argument('--use_manifest', action='store_true', help='Use manifest CSV instead of encoded latents')
+    parser = argparse.ArgumentParser(description="Train 2D CNN on mel-spectrograms (no neural codec bias)")
+    parser.add_argument('--use_cached', action='store_true', help='Use pre-computed cached spectrograms (fastest)')
+    parser.add_argument('--cached_manifest', type=str, default=None, help='Path to cached spectrogram manifest')
+    parser.add_argument('--latent_dir', type=str, default=None, help='Path to encoded latent directory (with neural codecs)')
     parser.add_argument('--epochs', type=int, default=20, help='Number of epochs')
-    parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
-    parser.add_argument('--samples', type=int, default=None, help='Number of samples per class (default: None = all data)')
+    parser.add_argument('--samples', type=int, default=None, help='Max samples to load (None = all data)')
     args = parser.parse_args()
     
     print("=" * 70)
-    print("🎵 Training 2D CNN on Mel-Spectrogram Latents")
+    print("🎵 Training 2D CNN on Mel-Spectrograms")
     print("=" * 70)
     
     # Determine data source
     data_source = None
-    if args.use_manifest:
-        if not args.manifest:
-            # Default manifest path
-            args.manifest = str(Path(ROOT_DIR) / "data/trainset/manifest.csv")
-        print(f"Loading from manifest: {args.manifest}\n")
-        data_source = args.manifest
-        train_data, val_data, test_data, input_shape = load_manifest_for_training(
-            args.manifest,
+    if args.use_cached:
+        # Fastest approach: pre-computed spectrograms (no neural codecs)
+        if not args.cached_manifest:
+            args.cached_manifest = str(Path(ROOT_DIR) / "data/cached_spectrograms/manifest.csv")
+        print(f"Mode: Cached Spectrograms (no neural codec bias)")
+        print(f"Manifest: {args.cached_manifest}\n")
+        data_source = args.cached_manifest
+        train_data, val_data, test_data, input_shape = load_cached_spectrograms_for_training(
+            args.cached_manifest,
             num_samples=args.samples
         )
     else:
+        # Default approach: neural codec latents  
         if not args.latent_dir:
-            # Default latent directory
             args.latent_dir = str(Path(ROOT_DIR) / "data/encoded_trainset")
-        print(f"Loading from latent directory: {args.latent_dir}\n")
+        print(f"Mode: Neural Codec Latents (encodec, dac, etc.)")
+        print(f"Directory: {args.latent_dir}\n")
         data_source = args.latent_dir
         train_data, val_data, test_data, input_shape = load_spectrogram_latents_for_training(
             args.latent_dir,
@@ -140,12 +142,19 @@ if __name__ == '__main__':
         )
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}\n")
+    print(f"Device: {device}\n")
     
-    # Setup loaders
-    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_data, batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False)
+    # Setup data loaders
+    # Cached specs are already fast (just numpy I/O), latents benefit from workers
+    num_workers = 0 if args.use_cached else min(4, os.cpu_count() or 1)
+    collate_fn = collate_fn_skip_none if args.use_cached else None
+    
+    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, 
+                             num_workers=num_workers, pin_memory=(num_workers > 0), collate_fn=collate_fn)
+    val_loader = DataLoader(val_data, batch_size=args.batch_size, shuffle=False,
+                           num_workers=num_workers, pin_memory=(num_workers > 0), collate_fn=collate_fn)
+    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False,
+                            num_workers=num_workers, pin_memory=(num_workers > 0), collate_fn=collate_fn)
     
     # Build model
     model = CNN2D(input_shape, num_classes=2).to(device)
@@ -246,14 +255,15 @@ if __name__ == '__main__':
     model_dir.mkdir(exist_ok=True)
     
     # Save model checkpoint
-    model_path = model_dir / "CNN_manifest.pt"
+    model_suffix = "CNN_cached_spec.pt"
+    model_path = model_dir / model_suffix
     torch.save(model.state_dict(), model_path)
     print(f"✅ Model saved to {model_path}")
     
     # Save training info
     training_info = {
         "model": "CNN2D",
-        "input_shape": input_shape,
+        "data_mode": "cached_specs" if args.use_cached else "neural_codecs",
         "data_source": data_source,
         "num_training_samples": len(train_data),
         "epochs_trained": epoch + 1,
@@ -268,7 +278,7 @@ if __name__ == '__main__':
         "device": str(device)
     }
     
-    info_path = model_dir / "training_info_manifest.json"
+    info_path = model_dir / f"training_info_{model_suffix}.json"
     with open(info_path, 'w') as f:
         json.dump(training_info, f, indent=2)
     print(f"✅ Training info saved to {info_path}")

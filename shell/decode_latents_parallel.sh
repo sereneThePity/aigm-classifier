@@ -28,7 +28,7 @@ OUTPUT_DIR="${2:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_trains
 NUM_WORKERS="${3:-40}"
 
 # Default decode parameters
-SR=44100
+SR=22500
 N_MELS=128
 
 echo -e "${BLUE}🎯 Starting latent decoding job...${NC}"
