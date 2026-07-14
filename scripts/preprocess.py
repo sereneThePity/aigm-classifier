@@ -6,6 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from typing import Tuple
+from torch.utils.data import default_collate
 from utils import normalize_spectrogram
 
 
@@ -14,7 +15,7 @@ def collate_fn_skip_none(batch):
     batch = [item for item in batch if item is not None]
     if len(batch) == 0:
         return None
-    return torch.utils.data._utils.default_collate(batch)
+    return default_collate(batch)
 
 
 class CachedSpectrogramDataset(torch.utils.data.Dataset):
@@ -313,3 +314,165 @@ def load_encoded_latents_for_training(
     print(f"Split: train={len(y_train)}, val={len(y_val)}, test={len(y_test)}\n")
     
     return train_dataset, val_dataset, test_dataset, X_train.shape[1:]
+
+
+def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True):
+    """
+    Load all samples from a manifest for evaluation.
+    Prefers cached spectrograms if available, falls back to raw audio.
+    
+    Args:
+        manifest_path: Path to manifest CSV
+        num_samples: Max samples to load (None for all)
+        use_cached: Try to load from cached spectrograms first
+    
+    Returns:
+        Tuple of (X, y) where X is (N, 1, 128, time) and y is (N,)
+    """
+    import librosa
+    from scipy.ndimage import zoom
+    
+    df = pd.read_csv(manifest_path)
+    
+    if num_samples is not None:
+        df = df.sample(n=min(num_samples, len(df)), random_state=42)
+    
+    X_list = []
+    y_list = []
+    
+    # Check if cached spectrograms are available
+    if use_cached and 'spectrogram_path' in df.columns:
+        print(f"Loading {len(df)} samples from cached spectrograms...")
+        for idx, row in tqdm(df.iterrows(), total=len(df), desc="Loading cached specs", leave=False):
+            try:
+                spec_path = row['spectrogram_path']
+                if os.path.exists(spec_path):
+                    spec = np.load(spec_path)  # (1, 128, time_steps)
+                    label = int(row['label'])
+                    X_list.append(spec)
+                    y_list.append(label)
+            except Exception:
+                continue
+    else:
+        # Fall back to loading raw audio and creating spectrograms
+        print(f"Loading {len(df)} samples from raw audio files...")
+        for idx, row in tqdm(df.iterrows(), total=len(df), desc="Processing audio", leave=False):
+            try:
+                filepath = row['filepath']
+                if not os.path.exists(filepath):
+                    continue
+                
+                # Load audio and create spectrogram
+                audio, sr = librosa.load(filepath, sr=22050, mono=True)
+                spec = librosa.feature.melspectrogram(y=audio, sr=22050, n_mels=128)
+                spec_db = librosa.power_to_db(spec, ref=np.max)
+                
+                # Normalize
+                spec_db = normalize_spectrogram(spec_db)
+                
+                # Add channel dimension: (128, T) → (1, 128, T)
+                spec_db = spec_db[np.newaxis, :, :]
+                
+                label = int(row['label'])
+                X_list.append(spec_db)
+                y_list.append(label)
+            except Exception:
+                continue
+    
+    if not X_list:
+        raise ValueError("No valid samples loaded from manifest")
+    
+    # Pad all spectrograms to same time dimension (128)
+    max_time = max(x.shape[2] for x in X_list)
+    target_time = max(128, min(max_time, 256))  # Cap at 256 to avoid huge tensors
+    
+    X_padded = []
+    for spec in X_list:
+        if spec.shape[2] < target_time:
+            pad_width = ((0, 0), (0, 0), (0, target_time - spec.shape[2]))
+            spec = np.pad(spec, pad_width, mode='constant')
+        elif spec.shape[2] > target_time:
+            spec = spec[:, :, :target_time]
+        X_padded.append(spec)
+    
+    X = np.array(X_padded, dtype=np.float32)
+    y = np.array(y_list, dtype=np.int64)
+    
+    print(f"Loaded {len(X)} samples with shape {X.shape}")
+    return X, y
+
+
+def load_all_from_manifest_with_transforms(manifest_path, target_shape=(128, 128), n_mels=128, transform="random"):
+    """
+    Load all samples from manifest with audio augmentation/transforms applied.
+    Uses raw audio files and applies transforms before creating spectrograms.
+    
+    Args:
+        manifest_path: Path to manifest CSV
+        target_shape: Target (freq, time) shape for spectrograms
+        n_mels: Number of mel bins
+        transform: Type of transform ('random', 'pitch_shift', 'time_stretch', etc.)
+    
+    Returns:
+        Tuple of (X, y) where X is (N, 1, freq, time) and y is (N,)
+    """
+    import librosa
+    from scipy.ndimage import zoom
+    
+    df = pd.read_csv(manifest_path)
+    
+    X_list = []
+    y_list = []
+    
+    print(f"Loading {len(df)} samples with transforms...")
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Processing audio with transforms"):
+        try:
+            filepath = row['filepath']
+            if not os.path.exists(filepath):
+                continue
+            
+            # Load audio
+            audio, sr = librosa.load(filepath, sr=22050, mono=True)
+            
+            # Apply transforms
+            if transform == "pitch_shift":
+                audio = librosa.effects.pitch_shift(audio, sr=sr, n_steps=np.random.randint(-2, 3))
+            elif transform == "time_stretch":
+                audio = librosa.effects.time_stretch(audio, rate=np.random.uniform(0.9, 1.1))
+            elif transform == "random":
+                # Random choice of transforms
+                tf = np.random.choice(['pitch', 'stretch', 'none'])
+                if tf == 'pitch':
+                    audio = librosa.effects.pitch_shift(audio, sr=sr, n_steps=np.random.randint(-1, 2))
+                elif tf == 'stretch':
+                    audio = librosa.effects.time_stretch(audio, rate=np.random.uniform(0.95, 1.05))
+            
+            # Create spectrogram
+            spec = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=n_mels)
+            spec_db = librosa.power_to_db(spec, ref=np.max)
+            
+            # Normalize
+            spec_db = normalize_spectrogram(spec_db)
+            
+            # Resize to target shape using zoom
+            zoom_factors = (target_shape[0] / spec_db.shape[0], target_shape[1] / spec_db.shape[1])
+            spec_resized = zoom(spec_db, zoom_factors, order=1).astype(np.float32)
+            
+            # Add channel dimension
+            spec_tensor = spec_resized[np.newaxis, :, :]
+            
+            label = int(row['label'])
+            X_list.append(spec_tensor)
+            y_list.append(label)
+        except Exception:
+            continue
+    
+    if not X_list:
+        print("❌ No valid samples processed with transforms.")
+        return np.array([]), np.array([])
+    
+    X = np.array(X_list, dtype=np.float32)
+    y = np.array(y_list, dtype=np.int64)
+    
+    print(f"Loaded {len(X)} samples with transforms, shape {X.shape}")
+    return X, y

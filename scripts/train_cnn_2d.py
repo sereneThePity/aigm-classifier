@@ -263,6 +263,7 @@ if __name__ == '__main__':
     # Save training info
     training_info = {
         "model": "CNN2D",
+        "input_shape": input_shape,
         "data_mode": "cached_specs" if args.use_cached else "neural_codecs",
         "data_source": data_source,
         "num_training_samples": len(train_data),

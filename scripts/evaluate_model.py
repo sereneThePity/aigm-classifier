@@ -4,14 +4,16 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logs
 import numpy as np
 import torch
 import argparse
+import csv
 from pathlib import Path
 from tqdm import tqdm
-from preprocess import load_dataset, load_dataset_comprehensive
+from preprocess import load_all_from_manifest, load_all_from_manifest_with_transforms
 from utils import ROOT_DIR, DATA_DIR
 import tensorflow as tf
 from train_cnn import SimpleCNN
 from train_cnn_2d import CNN2D, CNN2D_Legacy
 from scipy.ndimage import zoom
+
 
 def is_model_2d_cnn(model):
     """Check if model is a 2D CNN."""
@@ -22,12 +24,17 @@ def preprocess_spectrograms_for_2d_cnn(X):
     Preprocess spectrograms for 2D CNN: resize to (128, 128) and add channel dimension.
     
     Args:
-        X: Array of spectrograms with shape (N, 128, T) where T is variable time steps
+        X: Array of spectrograms with shape (N, 1, 128, T) or (N, 128, T)
     
     Returns:
         Array with shape (N, 1, 128, 128)
     """
     print(f"Preprocessing data for 2D CNN...")
+    
+    # Remove channel dimension if present
+    if X.ndim == 4 and X.shape[1] == 1:
+        X = np.squeeze(X, axis=1)  # (N, 1, 128, T) -> (N, 128, T)
+    
     X_reshaped = np.zeros((len(X), 128, 128), dtype=np.float32)
     for i, spec in enumerate(tqdm(X, desc="Resizing spectrograms", leave=False)):
         # spec has shape (128, T) where T is variable time steps
@@ -35,7 +42,20 @@ def preprocess_spectrograms_for_2d_cnn(X):
         if spec.ndim == 2:
             # Use zoom to resize to (128, 128)
             zoom_factors = (128 / spec.shape[0], 128 / spec.shape[1])
-            X_reshaped[i] = zoom(spec, zoom_factors, order=1)  # Linear interpolation
+            spec_zoomed = zoom(spec, zoom_factors, order=1)  # Linear interpolation
+            
+            # Ensure exact shape after zoom
+            if spec_zoomed.shape[0] < 128:
+                spec_zoomed = np.pad(spec_zoomed, ((0, 128 - spec_zoomed.shape[0]), (0, 0)), mode='constant')
+            elif spec_zoomed.shape[0] > 128:
+                spec_zoomed = spec_zoomed[:128, :]
+            
+            if spec_zoomed.shape[1] < 128:
+                spec_zoomed = np.pad(spec_zoomed, ((0, 0), (0, 128 - spec_zoomed.shape[1])), mode='constant')
+            elif spec_zoomed.shape[1] > 128:
+                spec_zoomed = spec_zoomed[:, :128]
+            
+            X_reshaped[i] = spec_zoomed
         else:
             # Already 2D, just ensure it's 128x128
             X_reshaped[i] = spec
@@ -123,11 +143,12 @@ def load_model_auto(model_path):
 
 def evaluate(model_path, manifest_path, n_samples=1000):
     model, model_type = load_model_auto(model_path)
-    if model_type == 'keras':
-        X, y = load_dataset(manifest_path)
-    else:
-        X, y = load_dataset_comprehensive(manifest_path, num_samples=n_samples, num_workers=10)
-        X = preprocess_data(X, model)
+    
+    # Load dataset using preprocess.py helper
+    X, y = load_all_from_manifest(manifest_path, num_samples=n_samples, use_cached=True)
+    
+    # Preprocess data for model type
+    X = preprocess_data(X, model)
     
     if model_type == 'pytorch':
         # Convert to torch tensor and move to same device as model
@@ -161,7 +182,7 @@ def evaluate_with_transform(model_path, manifest_path, n_mels=128, target_shape=
         target_shape: Target shape for mel spectrogram (freq, time)
     """
     model, model_type = load_model_auto(model_path)
-    X, y = load_dataset_with_transforms(manifest_path, target_shape=target_shape, n_mels=n_mels, transform=transform)
+    X, y = load_all_from_manifest_with_transforms(manifest_path, target_shape=target_shape, n_mels=n_mels, transform=transform)
     
     if len(X) == 0:
         print("❌ No valid samples processed.")
@@ -199,7 +220,8 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
     
 
     if model_type == 'keras':
-        X, y = load_dataset(manifest_path)
+        # Load dataset using preprocess.py helper
+        X, y = load_all_from_manifest(manifest_path, use_cached=True)
         model.summary()  # useful to see layer names if you don't know them yet
 
         # Pick layer by name or default to penultimate
@@ -222,8 +244,6 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
     
     else:  # PyTorch model
         # Load manifest and process samples one-by-one
-        import csv
-        import librosa
         
         print("Loading manifest...")
         manifest_data = []
@@ -277,10 +297,12 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
                 continue
             
             try:
+                import librosa
                 # Load and process single audio file
                 audio, sr = librosa.load(filepath, sr=22050, mono=True)
                 spec = librosa.feature.melspectrogram(y=audio, sr=22050, n_mels=128)
                 spec_db = librosa.power_to_db(spec, ref=np.max)
+                
                 # Resize to (128, 128)
                 zoom_factors = (128 / spec_db.shape[0], 128 / spec_db.shape[1])
                 spec_resized = zoom(spec_db, zoom_factors, order=1).astype(np.float32)
