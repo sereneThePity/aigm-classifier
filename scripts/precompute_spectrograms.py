@@ -68,7 +68,7 @@ def process_single_file(args):
 def precompute_spectrograms(
     manifest_path,
     output_dir,
-    sr=22050,
+    sr=16000,
     segment_duration=5.0,
     target_loudness=-20.0,
     hp_freq=20,

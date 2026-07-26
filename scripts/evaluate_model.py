@@ -285,6 +285,7 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         memmap_labels = None
         memmap_specs = None
         processed_count = 0
+        skipped_count = 0
         
         print(f"Processing {len(manifest_data)} samples...")
         
@@ -294,13 +295,19 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
             label = int(sample_info.get('label', 0))
             
             if not os.path.exists(filepath):
+                skipped_count += 1
                 continue
             
             try:
                 import librosa
-                # Load and process single audio file
-                audio, sr = librosa.load(filepath, sr=22050, mono=True)
-                spec = librosa.feature.melspectrogram(y=audio, sr=22050, n_mels=128)
+                import warnings
+                
+                # Load and process single audio file (suppress codec warnings)
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore')
+                    audio, sr = librosa.load(filepath, sr=16000, mono=True)
+                
+                spec = librosa.feature.melspectrogram(y=audio, sr=16000, n_mels=128)
                 spec_db = librosa.power_to_db(spec, ref=np.max)
                 
                 # Resize to (128, 128)
@@ -343,6 +350,8 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
                     memmap_specs.flush()
                     
             except Exception as e:
+                # Skip files with codec errors or loading issues
+                skipped_count += 1
                 continue
         
         # Final flush and proper save
@@ -367,7 +376,7 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
             
             del memmap_features, memmap_labels, memmap_specs
         
-        print(f"✅ Extracted features from layer '{layer_name}' for {processed_count} samples")
+        print(f"✅ Extracted features from layer '{layer_name}' for {processed_count} samples (skipped {skipped_count}/{len(manifest_data)} problematic files)")
         print(f"💾 Features saved to {save_path}")
         print(f"💾 Labels saved to {save_path.replace('.npy', '_labels.npy')}")
         print(f"💾 Specs saved to {save_path.replace('.npy', '_specs.npy')}")
