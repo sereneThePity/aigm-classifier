@@ -316,10 +316,11 @@ def load_encoded_latents_for_training(
     return train_dataset, val_dataset, test_dataset, X_train.shape[1:]
 
 
-def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True):
+def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True, sample_rate=16000):
     """
     Load all samples from a manifest for evaluation.
     Prefers cached spectrograms if available, falls back to raw audio.
+    Skips files with codec errors or loading issues.
     
     Args:
         manifest_path: Path to manifest CSV
@@ -330,7 +331,11 @@ def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True):
         Tuple of (X, y) where X is (N, 1, 128, time) and y is (N,)
     """
     import librosa
+    import warnings
     from scipy.ndimage import zoom
+    
+    # Suppress librosa warnings during loading
+    warnings.filterwarnings('ignore', category=UserWarning)
     
     df = pd.read_csv(manifest_path)
     
@@ -339,11 +344,13 @@ def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True):
     
     X_list = []
     y_list = []
+    skipped_count = 0
+    total_count = len(df)
     
     # Check if cached spectrograms are available
     if use_cached and 'spectrogram_path' in df.columns:
-        print(f"Loading {len(df)} samples from cached spectrograms...")
-        for idx, row in tqdm(df.iterrows(), total=len(df), desc="Loading cached specs", leave=False):
+        print(f"Loading {total_count} samples from cached spectrograms...")
+        for idx, row in tqdm(df.iterrows(), total=total_count, desc="Loading cached specs", leave=False):
             try:
                 spec_path = row['spectrogram_path']
                 if os.path.exists(spec_path):
@@ -351,20 +358,27 @@ def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True):
                     label = int(row['label'])
                     X_list.append(spec)
                     y_list.append(label)
+                else:
+                    skipped_count += 1
             except Exception:
+                skipped_count += 1
                 continue
     else:
         # Fall back to loading raw audio and creating spectrograms
-        print(f"Loading {len(df)} samples from raw audio files...")
-        for idx, row in tqdm(df.iterrows(), total=len(df), desc="Processing audio", leave=False):
+        print(f"Loading {total_count} samples from raw audio files...")
+        for idx, row in tqdm(df.iterrows(), total=total_count, desc="Processing audio", leave=False):
             try:
                 filepath = row['filepath']
                 if not os.path.exists(filepath):
+                    skipped_count += 1
                     continue
                 
-                # Load audio and create spectrogram
-                audio, sr = librosa.load(filepath, sr=22050, mono=True)
-                spec = librosa.feature.melspectrogram(y=audio, sr=22050, n_mels=128)
+                # Load audio and create spectrogram (suppress librosa codec warnings)
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore')
+                    audio, sr = librosa.load(filepath, sr=sample_rate, mono=True)
+                
+                spec = librosa.feature.melspectrogram(y=audio, sr=sample_rate, n_mels=128)
                 spec_db = librosa.power_to_db(spec, ref=np.max)
                 
                 # Normalize
@@ -377,6 +391,7 @@ def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True):
                 X_list.append(spec_db)
                 y_list.append(label)
             except Exception:
+                skipped_count += 1
                 continue
     
     if not X_list:
@@ -398,7 +413,7 @@ def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True):
     X = np.array(X_padded, dtype=np.float32)
     y = np.array(y_list, dtype=np.int64)
     
-    print(f"Loaded {len(X)} samples with shape {X.shape}")
+    print(f"Loaded {len(X)} samples with shape {X.shape} (skipped {skipped_count}/{total_count} problematic files)")
     return X, y
 
 
@@ -406,6 +421,7 @@ def load_all_from_manifest_with_transforms(manifest_path, target_shape=(128, 128
     """
     Load all samples from manifest with audio augmentation/transforms applied.
     Uses raw audio files and applies transforms before creating spectrograms.
+    Skips files with codec errors or loading issues.
     
     Args:
         manifest_path: Path to manifest CSV
@@ -417,22 +433,31 @@ def load_all_from_manifest_with_transforms(manifest_path, target_shape=(128, 128
         Tuple of (X, y) where X is (N, 1, freq, time) and y is (N,)
     """
     import librosa
+    import warnings
     from scipy.ndimage import zoom
+    
+    # Suppress librosa warnings during loading
+    warnings.filterwarnings('ignore', category=UserWarning)
     
     df = pd.read_csv(manifest_path)
     
     X_list = []
     y_list = []
+    skipped_count = 0
+    total_count = len(df)
     
-    print(f"Loading {len(df)} samples with transforms...")
-    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Processing audio with transforms"):
+    print(f"Loading {total_count} samples with transforms...")
+    for idx, row in tqdm(df.iterrows(), total=total_count, desc="Processing audio with transforms"):
         try:
             filepath = row['filepath']
             if not os.path.exists(filepath):
+                skipped_count += 1
                 continue
             
-            # Load audio
-            audio, sr = librosa.load(filepath, sr=22050, mono=True)
+            # Load audio (suppress librosa codec warnings)
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                audio, sr = librosa.load(filepath, sr=16000, mono=True)
             
             # Apply transforms
             if transform == "pitch_shift":
@@ -465,6 +490,7 @@ def load_all_from_manifest_with_transforms(manifest_path, target_shape=(128, 128
             X_list.append(spec_tensor)
             y_list.append(label)
         except Exception:
+            skipped_count += 1
             continue
     
     if not X_list:
@@ -474,5 +500,5 @@ def load_all_from_manifest_with_transforms(manifest_path, target_shape=(128, 128
     X = np.array(X_list, dtype=np.float32)
     y = np.array(y_list, dtype=np.int64)
     
-    print(f"Loaded {len(X)} samples with transforms, shape {X.shape}")
+    print(f"Loaded {len(X)} samples with transforms, shape {X.shape} (skipped {skipped_count}/{total_count} problematic files)")
     return X, y
