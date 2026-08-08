@@ -263,7 +263,7 @@ Test how your trained model performs on audio processed with different codecs:
     import numpy as np
     
     # Load trained model
-    model = load_model("models/audio_classifier_model.keras")
+    model = load_model("models/cnn_model.pt")
     
     # Test on different codecs
     codecs_to_test = ["griffinmel", "audiolm", "valle", "encodec_meta"]
