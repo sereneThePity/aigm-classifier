@@ -23,8 +23,8 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Default parameters
-INPUT_DIR="${1:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_latents}"
-OUTPUT_DIR="${2:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_trainset}"
+INPUT_DIR="${1:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_latents_16khz}"
+OUTPUT_DIR="${2:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_trainset_16khz}"
 NUM_WORKERS="${3:-40}"
 
 # Default decode parameters

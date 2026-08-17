@@ -199,7 +199,7 @@ def evaluate_with_transform(model_path, manifest_path, n_mels=128, target_shape=
 
     return acc
 
-def extract_intermediate_activations(model_path, manifest_path, layer_name=None, save_path=None, sample_rate=16000):
+def extract_intermediate_activations(model_path, manifest_path, layer_name=None, save_path=None, sample_rate=16000, device=None):
     """
     Extract intermediate activations from a model layer.
     
@@ -209,8 +209,14 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         layer_name: Name of layer to extract from (auto-detect if None)
         save_path: Path to save features (if None, auto-generate from model name)
         sample_rate: Sample rate for audio loading (IMPORTANT: must match model training)
+        device: Device to use ('cuda', 'cpu', or None for auto-detect)
     """
     model = load_model_auto(model_path)
+    
+    # Set device
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device)
     
     # Extract model name from path if save_path not provided
     if save_path is None:
@@ -262,8 +268,6 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         if name == layer_name:
             module.register_forward_hook(get_activation(layer_name))
             break
-    
-    device = next(model.parameters()).device
     
     # Pre-allocate memmap files (we'll determine shape from first sample)
     first_pass = True
@@ -360,6 +364,14 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
         np.save(specs_path, specs_trimmed)
         
         del memmap_features, memmap_labels, memmap_specs
+        
+        # Clean up memmap files (they're temporary and now saved as .npy)
+        if os.path.exists(save_path.replace('.npy', '.memmap')):
+            os.remove(save_path.replace('.npy', '.memmap'))
+        if os.path.exists(labels_path.replace('.npy', '.memmap')):
+            os.remove(labels_path.replace('.npy', '.memmap'))
+        if os.path.exists(specs_path.replace('.npy', '.memmap')):
+            os.remove(specs_path.replace('.npy', '.memmap'))
     
     print(f"✅ Extracted features from layer '{layer_name}' for {processed_count} samples (skipped {skipped_count}/{len(manifest_data)} problematic files)")
     print(f"💾 Features saved to {save_path}")
@@ -367,7 +379,7 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
     print(f"💾 Specs saved to {specs_path}")
 
 
-def extract_all_layer_activations(model_path, manifest_path, save_path=None, sample_rate=16000, layer_types=None):
+def extract_all_layer_activations(model_path, manifest_path, save_path=None, sample_rate=16000, layer_types=None, device=None):
     """
     Extract intermediate activations from ALL layers in a model.
     
@@ -377,11 +389,17 @@ def extract_all_layer_activations(model_path, manifest_path, save_path=None, sam
         save_path: Directory to save features (if None, auto-generates as data/processed/{model_name})
         sample_rate: Sample rate for audio loading (IMPORTANT: must match model training)
         layer_types: Tuple of layer types to extract from (default: Conv2d and Linear for PyTorch)
+        device: Device to use ('cuda', 'cpu', or None for auto-detect)
     
     Returns:
         Dict mapping layer names to their activation shapes
     """
     model = load_model_auto(model_path)
+    
+    # Set device
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device)
     
     # Extract model name from path if save_path not provided
     if save_path is None:
@@ -428,8 +446,6 @@ def extract_all_layer_activations(model_path, manifest_path, save_path=None, sam
     for layer_name, module in target_layers.items():
         hook = module.register_forward_hook(get_activation_hook(layer_name))
         hooks.append(hook)
-    
-    device = next(model.parameters()).device
     
     # Pre-allocate memmaps for each layer
     layer_memmaps = {}
@@ -537,6 +553,21 @@ def extract_all_layer_activations(model_path, manifest_path, save_path=None, sam
     np.save(os.path.join(save_path, f"{model_name}_labels.npy"), labels_trimmed)
     np.save(os.path.join(save_path, f"{model_name}_specs.npy"), specs_trimmed)
     
+    # Clean up temporary memmap files
+    print(f"Cleaning up temporary memmap files...")
+    for layer_name, info in layer_info.items():
+        memmap_path = info['memmap_path']
+        if os.path.exists(memmap_path):
+            os.remove(memmap_path)
+    
+    # Remove labels and specs memmap files
+    labels_memmap_path = os.path.join(save_path, f"{model_name}_labels.memmap")
+    specs_memmap_path = os.path.join(save_path, f"{model_name}_specs.memmap")
+    if os.path.exists(labels_memmap_path):
+        os.remove(labels_memmap_path)
+    if os.path.exists(specs_memmap_path):
+        os.remove(specs_memmap_path)
+    
     # Clean up memmaps
     del layer_memmaps
     
@@ -577,6 +608,7 @@ if __name__ == "__main__":
     extract_parser.add_argument('--layer_name', help='Layer name to extract from')
     extract_parser.add_argument('--save_path', default=None, help='Path to save features (if None, auto-generates as data/processed/{model_name}/{model_name}.npy)')
     extract_parser.add_argument('--sample_rate', type=int, default=16000, help='Sample rate for audio loading (IMPORTANT: must match model training)')
+    extract_parser.add_argument('--device', default=None, help='Device to use (cuda/cpu, default: auto-detect)')
 
     # Subparser for extract_all_layer_activations
     extract_all_parser = subparsers.add_parser('extract_all', help='Extract intermediate activations from ALL layers')
@@ -584,6 +616,7 @@ if __name__ == "__main__":
     extract_all_parser.add_argument('--manifest_path', required=True, help='Path to the manifest CSV')
     extract_all_parser.add_argument('--save_path', default=None, help='Path to save features (if None, auto-generates as data/processed/{model_name})')
     extract_all_parser.add_argument('--sample_rate', type=int, default=16000, help='Sample rate for audio loading (IMPORTANT: must match model training)')
+    extract_all_parser.add_argument('--device', default=None, help='Device to use (cuda/cpu, default: auto-detect)')
 
     args = parser.parse_args()
 
@@ -593,9 +626,9 @@ if __name__ == "__main__":
         target_shape = (args.freq, args.time)
         evaluate_with_transform(args.model_path, args.manifest_path, args.n_mels, target_shape, args.transform)
     elif args.command == 'extract':
-        extract_intermediate_activations(args.model_path, args.manifest_path, args.layer_name, args.save_path, args.sample_rate)
+        extract_intermediate_activations(args.model_path, args.manifest_path, args.layer_name, args.save_path, args.sample_rate, args.device)
     elif args.command == 'extract_all':
-        extract_all_layer_activations(args.model_path, args.manifest_path, args.save_path, args.sample_rate)
+        extract_all_layer_activations(args.model_path, args.manifest_path, args.save_path, args.sample_rate, device=args.device)
     else:
         parser.print_help()
 

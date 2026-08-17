@@ -30,7 +30,7 @@ GPU_CODECS = {"encodec", "dac"}
 
 def preprocess_audio(
     file_path,
-    sr=22050,
+    sr=16000,
     segment_duration=5.0,
     target_loudness=-20.0,
     hp_freq=20
@@ -192,6 +192,20 @@ if __name__ == "__main__":
     output_dir = Path(args.output_dir)
     
     df_filtered = df.reset_index(drop=True)
+    
+    # Filter out files that already exist in output directory (any codec)
+    all_codecs = ["encodec", "dac", "audiolm", "valle", "griffin"]
+    def file_already_processed(row):
+        file_stem = Path(row["filepath"]).stem
+        label = str(row["label"])
+        for codec in all_codecs:
+            output_path = output_dir / codec / label / f"{file_stem}.npy"
+            if output_path.exists():
+                return True
+        return False
+    
+    df_filtered = df_filtered[~df_filtered.apply(file_already_processed, axis=1)]
+    df_filtered = df_filtered.reset_index(drop=True)
     
     # Assign codecs randomly and equally to remaining files
     codec_assignments = assign_codecs(df_filtered, args.codecs)

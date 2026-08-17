@@ -4,7 +4,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
-#SBATCH --dependency=afterok:11542283
+#SBATCH --dependency=afterok:11706322
 #SBATCH --cpus-per-task=40
 #SBATCH --gres=gpu:A100:1
 #SBATCH --mail-type=NONE

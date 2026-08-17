@@ -255,7 +255,7 @@ if __name__ == '__main__':
     model_dir.mkdir(exist_ok=True)
     
     # Save model checkpoint
-    model_suffix = "CNN_cached_spec.pt"
+    model_suffix = "CNN_16khz.pt"
     model_path = model_dir / model_suffix
     torch.save(model.state_dict(), model_path)
     print(f"✅ Model saved to {model_path}")
