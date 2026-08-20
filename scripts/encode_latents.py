@@ -14,18 +14,16 @@ from multiprocessing import Pool, Manager
 import os
 from functools import partial
 from utils import normalize_audio, apply_highpass_filter
-from neural_codec_confounders import MetaEnCodecWrapper, DACWrapper, AudioLMCodecWrapper, VALLECodecWrapper, GriffinMelCodec
+from neural_codec_confounders import MetaEnCodecWrapper, DACWrapper, GriffinMelCodec
 
 CODECS = {
     "encodec": MetaEnCodecWrapper,
     "dac": DACWrapper,
-    "audiolm": AudioLMCodecWrapper,
-    "valle": VALLECodecWrapper,
     "griffin": GriffinMelCodec
 }
 
 # Categorize codecs by device type
-CPU_CODECS = {"griffin", "audiolm", "valle"}
+CPU_CODECS = {"griffin"}
 GPU_CODECS = {"encodec", "dac"}
 
 def preprocess_audio(
@@ -84,10 +82,9 @@ def encode_decode_save(audio_file, output_path, codec):
         if audio is None:
             return False
         
-        # Encode-decode cycle (inference mode - no gradients)
-        with torch.no_grad():
-            encoded_frames = codec.encode(audio)
-            decoded_audio = codec.decode(encoded_frames)
+        # Use codec's process_audio method which handles encode-decode cycle
+        # This ensures type compatibility across all codec types
+        decoded_audio = codec.process_audio(audio)
         
         # Save decoded audio as numpy
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,9 +138,9 @@ def process_codec_worker(codec_name, df, output_dir, CODECS, codec_kwargs=None):
     # Get codec-specific parameters
     kwargs = codec_kwargs.get(codec_name, {})
     
-    # Load codec in this process
+    # Load codec in this process with 16kHz sample rate (matches audio preprocessing)
     codec_class = CODECS[codec_name]
-    codec = codec_class(sr=22500, **kwargs)
+    codec = codec_class(sr=16000, **kwargs)
     
     # Only call eval() if codec has a model attribute (PyTorch models)
     if hasattr(codec, 'model'):
@@ -178,8 +175,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True, help="Path to CSV manifest")
     parser.add_argument("--output_dir", required=True, help="Output directory for latents")
-    parser.add_argument("--codecs", nargs="+", default=["encodec", "dac", "audiolm", "valle", "griffin"], 
-                        help="List of codecs to use")
+    parser.add_argument("--codecs", nargs="+", default=["encodec", "dac", "griffin"], 
+                        help="List of codecs to use (real models only: encodec, dac, griffin)")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--workers", type=int, default=None,
                         help="Number of parallel codec workers (default: number of codecs)")
@@ -194,7 +191,7 @@ if __name__ == "__main__":
     df_filtered = df.reset_index(drop=True)
     
     # Filter out files that already exist in output directory (any codec)
-    all_codecs = ["encodec", "dac", "audiolm", "valle", "griffin"]
+    all_codecs = ["encodec", "dac", "griffin"]
     def file_already_processed(row):
         file_stem = Path(row["filepath"]).stem
         label = str(row["label"])
