@@ -33,7 +33,7 @@ from neural_codec_confounders import NeuralCodecConfounder, get_available_codecs
 class CodecApplier:
     """Applies neural codec confounders to audio files."""
     
-    def __init__(self, sr=22500):
+    def __init__(self, sr=16000):
         """
         Initialize codec applier.
         
@@ -229,8 +229,8 @@ Examples:
     parser.add_argument("--codec", type=str, default="griffinmel",
                        help="Codec to apply (default: griffinmel). Use 'all' to apply all available codecs")
     
-    parser.add_argument("--sr", type=int, default=22500,
-                       help="Sample rate for audio processing (default: 22500)")
+    parser.add_argument("--sr", type=int, default=16000,
+                       help="Sample rate for audio processing (default: 16000)")
     
     args = parser.parse_args()
     

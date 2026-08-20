@@ -7,7 +7,7 @@ codec/class structure. Output is ready for training a 2D CNN classifier.
 
 Usage:
     python decode_latents_to_audio.py
-    python decode_latents_to_audio.py --sr 22500 --output data/encoded_trainset
+    python decode_latents_to_audio.py --sr 16000 --output data/encoded_trainset
     python decode_latents_to_audio.py --subset encodec/0 --n-mels 128 --workers 4
 """
 
@@ -28,7 +28,7 @@ def normalize_spectrogram(mel_spec_db, mean=None, std=None):
     return (mel_spec_db - mean) / std
 
 
-def extract_mel_spectrogram(audio, sr=22500, n_mels=128):
+def extract_mel_spectrogram(audio, sr=16000, n_mels=128):
     """Extract and normalize mel spectrogram from audio array."""
     mel_spec = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=n_mels)
     mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
@@ -88,7 +88,7 @@ def process_file_wrapper(task):
 def decode_latents_to_spectrograms(
     input_dir="data/encoded_latents",
     output_dir="data/encoded_trainset",
-    sr=22500,
+    sr=16000,
     n_mels=128,
     target_shape=(128, 128),
     subset=None,
@@ -184,8 +184,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sr",
         type=int,
-        default=22500,
-        help="Sample rate in Hz (default: 22500)"
+        default=16000,
+        help="Sample rate in Hz (default: 16000)"
     )
     parser.add_argument(
         "--n-mels",

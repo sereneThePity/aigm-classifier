@@ -2,6 +2,8 @@
 
 #SBATCH --job-name="Encode-Latents"
 #SBATCH --time=48:00:00
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:A100:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=30
 #SBATCH --mail-type=NONE
@@ -22,7 +24,7 @@ NC='\033[0m'
 # Default parameters
 MANIFEST="${1:-/home/student/s/ssahu/share/aigm-classifier/data/trainset/manifest.csv}"
 OUTPUT_DIR="${2:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_latents_16khz}"
-CODECS="${3:-griffin audiolm valle}"
+CODECS="${3:-encodec dac griffin}"
 DEVICE="cuda"
 NUM_WORKERS=40
 ENCODEC_BW=24

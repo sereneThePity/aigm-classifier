@@ -32,7 +32,7 @@ EPOCHS=50
 BATCH_SIZE=32
 LEARNING_RATE=0.001
 USE_CACHED=false
-LATENT_DIR="/home/student/s/ssahu/share/aigm-classifier/data/encoded_trainset"
+LATENT_DIR="/home/student/s/ssahu/share/aigm-classifier/data/encoded_trainset_16khz"
 CACHED_MANIFEST="/home/student/s/ssahu/share/aigm-classifier/data/cached_spectrograms/manifest.csv"
 
 # Parse command line arguments
@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --use_cached)
-            USE_CACHED=true
+            USE_CACHED=false
             shift
             ;;
         --latent_dir)

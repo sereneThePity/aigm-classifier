@@ -26,7 +26,7 @@ def example_1_check_available_codecs():
     print("EXAMPLE 1: Checking Available Codec Confounders")
     print("="*70)
     
-    confounder = NeuralCodecConfounder(sr=22500)
+    confounder = NeuralCodecConfounder(sr=16000)
     available = confounder.get_available_codecs()
     
     print(f"\n✅ Available codecs: {available}")
@@ -55,7 +55,7 @@ def example_2_apply_codec_to_single_file():
     print("="*70)
     
     # For this example, we'll create a synthetic audio sample
-    sr = 22500
+    sr = 16000
     duration = 5.0
     t = np.linspace(0, duration, int(sr * duration))
     
@@ -117,7 +117,7 @@ def example_3_apply_all_codecs_comparison():
     print("="*70)
     
     # Create sample audio
-    sr = 22500
+    sr = 16000
     duration = 2.0
     t = np.linspace(0, duration, int(sr * duration))
     
@@ -310,7 +310,7 @@ Use codecs in custom preprocessing pipelines:
     import librosa
     
     class AudioProcessor:
-        def __init__(self, sr=22500):
+        def __init__(self, sr=16000):
             self.sr = sr
             self.confounder = NeuralCodecConfounder(sr=sr)
         
