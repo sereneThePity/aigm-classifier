@@ -3,6 +3,7 @@
 #SBATCH --job-name="Decode-Latents"
 #SBATCH --time=24:00:00
 #SBATCH --ntasks=1
+#SBATCH --dependency=afterok:12804271
 #SBATCH --cpus-per-task=40
 #SBATCH --mail-type=NONE
 #SBATCH --output=/home/student/s/ssahu/share/aigm-classifier/logs/slurm_%j.out
@@ -23,8 +24,8 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Default parameters
-INPUT_DIR="${1:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_latents_16khz}"
-OUTPUT_DIR="${2:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_trainset_16khz}"
+INPUT_DIR="${1:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_latents_16khz_test}"
+OUTPUT_DIR="${2:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_testset_16khz}"
 NUM_WORKERS="${3:-40}"
 
 # Default decode parameters

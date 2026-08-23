@@ -22,8 +22,8 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Default parameters
-MANIFEST="${1:-/home/student/s/ssahu/share/aigm-classifier/data/trainset/manifest.csv}"
-OUTPUT_DIR="${2:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_latents_16khz}"
+MANIFEST="${1:-/home/student/s/ssahu/share/aigm-classifier/data/testset/manifest.csv}"
+OUTPUT_DIR="${2:-/home/student/s/ssahu/share/aigm-classifier/data/encoded_latents_16khz_test}"
 CODECS="${3:-encodec dac griffin}"
 DEVICE="cuda"
 NUM_WORKERS=40
