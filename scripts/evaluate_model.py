@@ -138,17 +138,73 @@ def load_model_auto(model_path):
 
 def evaluate(model_path, manifest_path, n_samples=1000, sample_rate=16000):
     model = load_model_auto(model_path)
-    
-    # Load dataset using preprocess.py helper
-    X, y = load_all_from_manifest(manifest_path, num_samples=n_samples, use_cached=True, sample_rate=sample_rate)
-    
-    # Preprocess data for model type
-    X = preprocess_data(X, model)
-    
-    # Convert to torch tensor and move to same device as model
-    X_tensor = torch.from_numpy(X).float()
     device = next(model.parameters()).device
-    X_tensor = X_tensor.to(device)
+    
+    # Load manifest
+    manifest_data = []
+    with open(manifest_path, 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            manifest_data.append(row)
+    
+    if n_samples is not None:
+        manifest_data = manifest_data[:n_samples]
+    
+    print(f"Found {len(manifest_data)} samples in manifest")
+    print(f"ℹ️  Using sample_rate={sample_rate}Hz for audio loading")
+    
+    # Process samples one-by-one using identical preprocessing to extract_intermediate_activations
+    X_list = []
+    y_list = []
+    skipped_count = 0
+    
+    for sample_info in tqdm(manifest_data, desc="Evaluating"):
+        filepath = sample_info.get('filepath')
+        label = int(sample_info.get('label', 0))
+        
+        if not os.path.exists(filepath):
+            skipped_count += 1
+            continue
+        
+        try:
+            import librosa
+            import warnings
+            
+            # Load and process audio (suppress codec warnings)
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                audio, sr = librosa.load(filepath, sr=sample_rate, mono=True)
+            
+            # Compute mel-spectrogram
+            spec = librosa.feature.melspectrogram(y=audio, sr=sample_rate, n_mels=128)
+            spec_db = librosa.power_to_db(spec, ref=np.max)
+            
+            # Apply normalization
+            from utils import normalize_spectrogram
+            spec_db = normalize_spectrogram(spec_db)
+            
+            # Resize to (128, 128)
+            zoom_factors = (128 / spec_db.shape[0], 128 / spec_db.shape[1])
+            spec_resized = zoom(spec_db, zoom_factors, order=1).astype(np.float32)
+            
+            X_list.append(spec_resized)
+            y_list.append(label)
+            
+        except Exception:
+            skipped_count += 1
+            continue
+    
+    if len(X_list) == 0:
+        print("❌ No valid samples processed.")
+        return
+    
+    # Stack data and add channel dimension: (N, 128, 128) -> (N, 1, 128, 128)
+    X = np.array(X_list, dtype=np.float32)
+    X = np.expand_dims(X, axis=1)
+    y = np.array(y_list, dtype=np.int64)
+    
+    # Convert to torch tensor and run predictions
+    X_tensor = torch.from_numpy(X).float().to(device)
     
     with torch.no_grad():
         preds = model(X_tensor).cpu().numpy()
@@ -160,7 +216,7 @@ def evaluate(model_path, manifest_path, n_samples=1000, sample_rate=16000):
         preds_bin = (preds.flatten() > 0.5).astype(int)
     
     acc = np.mean(preds_bin == y)
-    print(f"✅ Accuracy: {acc*100:.2f}% on testset")
+    print(f"✅ Accuracy: {acc*100:.2f}% on testset ({len(X)} samples, skipped {skipped_count}/{len(manifest_data)})")
 
 def evaluate_with_transform(model_path, manifest_path, n_mels=128, target_shape=(128, 128), transform="random"):
     """
