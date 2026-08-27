@@ -504,21 +504,20 @@ def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True, sam
     return X, y
 
 
-def load_all_from_manifest_with_transforms(manifest_path, target_shape=(128, 128), n_mels=128, transform="random"):
+def make_transform_fn(transform):
     """
-    Load all samples from manifest with audio augmentation/transforms applied.
-    Uses raw audio files and applies transforms before creating spectrograms.
-    Skips files with codec errors or loading issues.
-    
+    Build a (audio, sr) -> audio hook for load_and_preprocess_audio's transform_fn from a name.
+
     Args:
-        manifest_path: Path to manifest CSV
-        target_shape: Target (freq, time) shape for spectrograms
-        n_mels: Number of mel bins
-        transform: Type of transform ('random', 'pitch_shift', 'time_stretch', etc.)
-    
+        transform: None, 'pitch_shift', 'time_stretch', or 'random' (picks pitch/stretch/none
+            per call)
+
     Returns:
-        Tuple of (X, y) where X is (N, 1, freq, time) and y is (N,)
+        Callable transform hook, or None if transform is None.
     """
+    if transform is None:
+        return None
+
     import librosa
 
     def apply_transform(audio, sr):
@@ -534,42 +533,4 @@ def load_all_from_manifest_with_transforms(manifest_path, target_shape=(128, 128
                 return librosa.effects.time_stretch(audio, rate=np.random.uniform(0.95, 1.05))
         return audio
 
-    df = pd.read_csv(manifest_path)
-    
-    X_list = []
-    y_list = []
-    skipped_count = 0
-    total_count = len(df)
-    
-    print(f"Loading {total_count} samples with transforms...")
-    for idx, row in tqdm(df.iterrows(), total=total_count, desc="Processing audio with transforms"):
-        try:
-            filepath = row['filepath']
-            if not os.path.exists(filepath):
-                skipped_count += 1
-                continue
-            
-            # Same pipeline used to build training data; center crop for determinism
-            audio = load_and_preprocess_audio(filepath, sr=16000, crop="center", transform_fn=apply_transform)
-            if audio is None:
-                skipped_count += 1
-                continue
-            
-            spec_tensor = audio_to_mel_spectrogram(audio, sr=16000, n_mels=n_mels, resize_to=target_shape)
-            
-            label = int(row['label'])
-            X_list.append(spec_tensor)
-            y_list.append(label)
-        except Exception:
-            skipped_count += 1
-            continue
-    
-    if not X_list:
-        print("❌ No valid samples processed with transforms.")
-        return np.array([]), np.array([])
-    
-    X = np.array(X_list, dtype=np.float32)
-    y = np.array(y_list, dtype=np.int64)
-    
-    print(f"Loaded {len(X)} samples with transforms, shape {X.shape} (skipped {skipped_count}/{total_count} problematic files)")
-    return X, y
+    return apply_transform

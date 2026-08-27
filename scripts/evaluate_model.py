@@ -5,12 +5,12 @@ import argparse
 import csv
 from pathlib import Path
 from tqdm import tqdm
-from preprocess import load_all_from_manifest, load_all_from_manifest_with_transforms, load_and_preprocess_audio, audio_to_mel_spectrogram
+from preprocess import load_and_preprocess_audio, audio_to_mel_spectrogram, make_transform_fn
 from utils import ROOT_DIR, DATA_DIR
 from train_cnn import SimpleCNN
 from train_cnn_2d import CNN2D, CNN2D_Legacy
 from scipy.ndimage import zoom
-from encode_latents import preprocess_audio, CODECS
+from encode_latents import CODECS
 from decode_latents_to_audio import extract_mel_spectrogram, pad_or_crop_spectrogram
 
 
@@ -136,173 +136,108 @@ def load_model_auto(model_path):
     model.eval()
     return model
 
-def evaluate(model_path, manifest_path, n_samples=1000, sample_rate=16000):
+def _predict_and_score(model, X, y, device):
+    """Run the model over X and return (accuracy, raw predictions)."""
+    X_tensor = torch.from_numpy(X).float().to(device)
+
+    with torch.no_grad():
+        preds = model(X_tensor).cpu().numpy()
+
+    # Handle multi-class output: take argmax if preds has shape (N, num_classes), else use threshold
+    if preds.ndim > 1 and preds.shape[1] > 1:
+        preds_bin = np.argmax(preds, axis=1)
+    else:
+        preds_bin = (preds.flatten() > 0.5).astype(int)
+
+    acc = np.mean(preds_bin == y)
+    return acc, preds
+
+def evaluate(model_path, manifest_path, n_samples=None, sample_rate=16000,
+             transform=None, codec_name=None, n_mels=128, target_shape=(128, 128)):
+    """
+    Evaluate model accuracy on a manifest of audio files.
+
+    Optional flags select what happens to the audio between loading and the mel-spectrogram,
+    replacing what used to be three separate functions:
+        transform: augmentation to apply before scoring ('pitch_shift', 'time_stretch', 'random')
+        codec_name: neural codec (from CODECS) to round-trip the audio through first, following
+            the same preprocess -> codec -> mel-spectrogram pipeline used to build the codec-latent
+            training set (see encode_latents.py / decode_latents_to_audio.py)
+    """
     model = load_model_auto(model_path)
     device = next(model.parameters()).device
-    
-    # Load manifest
+
+    codec = None
+    if codec_name is not None:
+        codec = CODECS[codec_name](sr=sample_rate)
+        if hasattr(codec, 'model'):
+            codec.model.eval()
+
+    transform_fn = make_transform_fn(transform)
+
     manifest_data = []
     with open(manifest_path, 'r') as f:
         reader = csv.DictReader(f)
         for row in reader:
             manifest_data.append(row)
-    
+
     if n_samples is not None:
         manifest_data = manifest_data[:n_samples]
-    
+
     print(f"Found {len(manifest_data)} samples in manifest")
     print(f"ℹ️  Using sample_rate={sample_rate}Hz for audio loading")
-    
-    # Process samples one-by-one using identical preprocessing to extract_intermediate_activations
-    X_list = []
-    y_list = []
+
+    desc = "Evaluating"
+    if codec_name:
+        desc += f" via {codec_name}"
+    if transform:
+        desc += f" with {transform} transform"
+
+    X_list, y_list = [], []
     skipped_count = 0
-    
-    for sample_info in tqdm(manifest_data, desc="Evaluating"):
+
+    for sample_info in tqdm(manifest_data, desc=desc):
         filepath = sample_info.get('filepath')
         label = int(sample_info.get('label', 0))
-        
+
         if not os.path.exists(filepath):
             skipped_count += 1
             continue
-        
+
         try:
             # Same pipeline used to build training data; center crop for determinism
-            audio = load_and_preprocess_audio(filepath, sr=sample_rate, crop="center")
+            audio = load_and_preprocess_audio(filepath, sr=sample_rate, crop="center", transform_fn=transform_fn)
             if audio is None:
                 skipped_count += 1
                 continue
-            
-            X_list.append(audio_to_mel_spectrogram(audio, sr=sample_rate, resize_to=(128, 128)))
+
+            if codec is not None:
+                # Mirrors the codec-latent training pipeline's spectrogram computation exactly
+                decoded_audio = codec.process_audio(audio)
+                spec = extract_mel_spectrogram(decoded_audio, sr=sample_rate, n_mels=n_mels)
+                spec = pad_or_crop_spectrogram(spec, target_shape)
+            else:
+                spec = audio_to_mel_spectrogram(audio, sr=sample_rate, n_mels=n_mels, resize_to=target_shape)[0]
+
+            X_list.append(spec.astype(np.float32))
             y_list.append(label)
-            
+
         except Exception:
             skipped_count += 1
             continue
-    
+
     if len(X_list) == 0:
         print("❌ No valid samples processed.")
         return
-    
-    # Stack data: audio_to_mel_spectrogram already added the channel dim -> (N, 1, 128, 128)
+
     X = np.array(X_list, dtype=np.float32)
     y = np.array(y_list, dtype=np.int64)
-    
-    # Convert to torch tensor and run predictions
-    X_tensor = torch.from_numpy(X).float().to(device)
-    
-    with torch.no_grad():
-        preds = model(X_tensor).cpu().numpy()
-    
-    # Handle multi-class output: take argmax if preds has shape (N, num_classes), else use threshold
-    if preds.ndim > 1 and preds.shape[1] > 1:
-        preds_bin = np.argmax(preds, axis=1)
-    else:
-        preds_bin = (preds.flatten() > 0.5).astype(int)
-    
-    acc = np.mean(preds_bin == y)
-    print(f"✅ Accuracy: {acc*100:.2f}% on testset ({len(X)} samples, skipped {skipped_count}/{len(manifest_data)})")
-
-def evaluate_with_transform(model_path, manifest_path, n_mels=128, target_shape=(128, 128), transform="random"):
-    """
-    Evaluate model on audio files with random transforms applied.
-    
-    Args:
-        model_path: Path to trained model (.pt for PyTorch)
-        manifest_path: CSV with 'filepath' and 'label' columns
-        n_mels: Number of mel bins
-        target_shape: Target shape for mel spectrogram (freq, time)
-    """
-    model = load_model_auto(model_path)
-    X, y = load_all_from_manifest_with_transforms(manifest_path, target_shape=target_shape, n_mels=n_mels, transform=transform)
-    
-    if len(X) == 0:
-        print("❌ No valid samples processed.")
-        return
-    
-    # Run predictions
-    X_tensor = torch.from_numpy(X).float()
-    device = next(model.parameters()).device
-    X_tensor = X_tensor.to(device)
-    
-    with torch.no_grad():
-        preds = model(X_tensor).cpu().numpy()
-    
-    # Handle multi-class output: take argmax if preds has shape (N, num_classes), else use threshold
-    if preds.ndim > 1 and preds.shape[1] > 1:
-        preds_bin = np.argmax(preds, axis=1)
-    else:
-        preds_bin = (preds.flatten() > 0.5).astype(int)
-    
-    # Compute accuracy
-    acc = np.mean(preds_bin == y)
-    print(f"\n✅ Accuracy with transforms: {acc*100:.2f}% ({len(X)} samples)")
-    print(f"   Mean confidence: {np.mean(preds):.3f}")
-    print(f"   Std confidence: {np.std(preds):.3f}")
-
-    return acc
-
-def evaluate_with_codec(model_path, manifest_path, codec_name, n_mels=128, target_shape=(128, 128), sample_rate=16000, n_samples=None):
-    """
-    Evaluate model on audio run through a neural codec, following the same
-    preprocess_audio -> codec.process_audio -> mel-spectrogram pipeline used
-    to build the training set (see encode_latents.py / decode_latents_to_audio.py).
-    The codec is instantiated once and reused for every sample.
-    """
-    model = load_model_auto(model_path)
-
-    # Load codec once and reuse for all samples
-    codec = CODECS[codec_name](sr=sample_rate)
-    if hasattr(codec, 'model'):
-        codec.model.eval()
-
-    manifest_data = []
-    with open(manifest_path, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            manifest_data.append(row)
-    if n_samples is not None:
-        manifest_data = manifest_data[:n_samples]
-
-    X_list, y_list = [], []
-    for sample_info in tqdm(manifest_data, desc=f"Evaluating via {codec_name}"):
-        filepath = sample_info.get('filepath')
-        label = int(sample_info.get('label', 0))
-
-        audio = preprocess_audio(filepath, sr=sample_rate, crop="center")
-        if audio is None:
-            continue
-
-        decoded_audio = codec.process_audio(audio)
-
-        mel_spec = extract_mel_spectrogram(decoded_audio, sr=sample_rate, n_mels=n_mels)
-        mel_spec = pad_or_crop_spectrogram(mel_spec, target_shape)
-
-        X_list.append(mel_spec.astype(np.float32))
-        y_list.append(label)
-
-    if len(X_list) == 0:
-        print("❌ No valid samples processed.")
-        return
-
-    X = np.stack(X_list, axis=0)
-    y = np.array(y_list)
     X = preprocess_data(X, model)
 
-    X_tensor = torch.from_numpy(X).float()
-    device = next(model.parameters()).device
-    X_tensor = X_tensor.to(device)
-
-    with torch.no_grad():
-        preds = model(X_tensor).cpu().numpy()
-
-    if preds.ndim > 1 and preds.shape[1] > 1:
-        preds_bin = np.argmax(preds, axis=1)
-    else:
-        preds_bin = (preds.flatten() > 0.5).astype(int)
-
-    acc = np.mean(preds_bin == y)
-    print(f"\n✅ Accuracy via '{codec_name}' codec: {acc*100:.2f}% ({len(X)} samples)")
+    acc, preds = _predict_and_score(model, X, y, device)
+    print(f"\n✅ Accuracy: {acc*100:.2f}% ({len(X)} samples, skipped {skipped_count}/{len(manifest_data)})")
+    print(f"   Mean confidence: {np.mean(preds):.3f}")
+    print(f"   Std confidence: {np.std(preds):.3f}")
     return acc
 
 def extract_intermediate_activations(model_path, manifest_path, layer_name=None, save_path=None, sample_rate=16000, device=None):
@@ -670,33 +605,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate audio classifier model")
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
 
-    # Subparser for evaluate
-    eval_parser = subparsers.add_parser('evaluate', help='Evaluate model without transforms')
+    # Subparser for evaluate (accuracy scoring, optionally through a transform and/or a codec)
+    eval_parser = subparsers.add_parser('evaluate', help='Evaluate model accuracy, optionally with a transform and/or a codec')
     eval_parser.add_argument('--model_path', required=True, help='Path to the model')
     eval_parser.add_argument('--manifest_path', required=True, help='Path to the manifest CSV')
-    eval_parser.add_argument('--n_samples', type=int, default=1000, help='Number of samples to evaluate (for PyTorch models)')
+    eval_parser.add_argument('--n_samples', type=int, default=None, help='Number of samples to evaluate (default: all)')
     eval_parser.add_argument('--sample_rate', type=int, default=16000, help='Sample rate for audio loading')
-
-
-    # Subparser for evaluate_with_transform
-    eval_trans_parser = subparsers.add_parser('evaluate_transform', help='Evaluate model with transforms')
-    eval_trans_parser.add_argument('--model_path', required=True, help='Path to the model')
-    eval_trans_parser.add_argument('--manifest_path', required=True, help='Path to the manifest CSV')
-    eval_trans_parser.add_argument('--n_mels', type=int, default=128, help='Number of mel bins')
-    eval_trans_parser.add_argument('--freq', type=int, default=128, help='Frequency dimension of target shape')
-    eval_trans_parser.add_argument('--time', type=int, default=128, help='Time dimension of target shape')
-    eval_trans_parser.add_argument('--transform', default='random', help='Transform type')
-
-    # Subparser for evaluate_with_codec
-    codec_parser = subparsers.add_parser('evaluate_codec', help='Evaluate model on audio run through a neural codec')
-    codec_parser.add_argument('--model_path', required=True, help='Path to the model')
-    codec_parser.add_argument('--manifest_path', required=True, help='Path to the manifest CSV')
-    codec_parser.add_argument('--codec_name', required=True, choices=list(CODECS.keys()), help='Codec to run audio through')
-    codec_parser.add_argument('--n_mels', type=int, default=128, help='Number of mel bins')
-    codec_parser.add_argument('--freq', type=int, default=128, help='Frequency dimension of target shape')
-    codec_parser.add_argument('--time', type=int, default=128, help='Time dimension of target shape')
-    codec_parser.add_argument('--sample_rate', type=int, default=16000, help='Sample rate for audio loading')
-    codec_parser.add_argument('--n_samples', type=int, default=None, help='Number of samples to evaluate (default: all)')
+    eval_parser.add_argument('--transform', default=None, choices=['pitch_shift', 'time_stretch', 'random'], help='Optional augmentation to apply before scoring')
+    eval_parser.add_argument('--codec_name', default=None, choices=list(CODECS.keys()), help='Optional neural codec to round-trip audio through before scoring')
+    eval_parser.add_argument('--n_mels', type=int, default=128, help='Number of mel bins')
+    eval_parser.add_argument('--freq', type=int, default=128, help='Frequency dimension of target shape')
+    eval_parser.add_argument('--time', type=int, default=128, help='Time dimension of target shape')
 
     # Subparser for extract_intermediate_activations
     extract_parser = subparsers.add_parser('extract', help='Extract intermediate activations')
@@ -718,13 +637,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.command == 'evaluate':
-        evaluate(args.model_path, args.manifest_path, args.n_samples, args.sample_rate)
-    elif args.command == 'evaluate_transform':
         target_shape = (args.freq, args.time)
-        evaluate_with_transform(args.model_path, args.manifest_path, args.n_mels, target_shape, args.transform)
-    elif args.command == 'evaluate_codec':
-        target_shape = (args.freq, args.time)
-        evaluate_with_codec(args.model_path, args.manifest_path, args.codec_name, args.n_mels, target_shape, args.sample_rate, args.n_samples)
+        evaluate(args.model_path, args.manifest_path, args.n_samples, args.sample_rate,
+                 transform=args.transform, codec_name=args.codec_name, n_mels=args.n_mels, target_shape=target_shape)
     elif args.command == 'extract':
         extract_intermediate_activations(args.model_path, args.manifest_path, args.layer_name, args.save_path, args.sample_rate, args.device)
     elif args.command == 'extract_all':
