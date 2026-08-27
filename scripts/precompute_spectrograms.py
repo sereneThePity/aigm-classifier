@@ -5,10 +5,10 @@ import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
-import librosa
 from tqdm import tqdm
 from multiprocessing import Pool
-from utils import ROOT_DIR, normalize_audio, apply_highpass_filter
+from utils import ROOT_DIR
+from preprocess import load_and_preprocess_audio, audio_to_mel_spectrogram
 
 
 def process_single_file(args):
@@ -16,45 +16,15 @@ def process_single_file(args):
     file_path, output_path, sr, segment_duration, target_loudness, hp_freq = args
     
     try:
-        # Load and preprocess audio
-        import warnings
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore")
-            y, loaded_sr = librosa.load(file_path, sr=None, mono=True)
+        audio = load_and_preprocess_audio(
+            file_path, sr=sr, segment_duration=segment_duration,
+            target_loudness=target_loudness, hp_freq=hp_freq, crop="random"
+        )
+        if audio is None:
+            return (output_path, False, "failed to load/preprocess audio")
         
-        # Resample
-        if loaded_sr != sr:
-            y = librosa.resample(y, orig_sr=loaded_sr, target_sr=sr)
-        
-        # Loudness normalize
-        y = normalize_audio(y, method='db', target=target_loudness)
-        
-        # Trim silence
-        y, _ = librosa.effects.trim(y, top_db=40)
-        
-        # Random crop to fixed-length segment
-        segment_samples = int(segment_duration * sr)
-        if len(y) >= segment_samples:
-            max_start = len(y) - segment_samples
-            start_idx = np.random.randint(0, max_start + 1)
-            y = y[start_idx:start_idx + segment_samples]
-        else:
-            pad_width = segment_samples - len(y)
-            y = np.pad(y, (0, pad_width), mode='constant')
-        
-        # High-pass filter
-        y = apply_highpass_filter(y, sr, cutoff_freq=hp_freq)
-        
-        # Compute spectrogram
-        spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128)
-        spec_db = librosa.power_to_db(spec, ref=np.max)
-        
-        # Normalize
-        spec_db = (spec_db - spec_db.mean()) / (spec_db.std() + 1e-7)
-        spec_db = spec_db.astype(np.float32)
-        
-        # Add channel dimension: (1, 128, time_steps)
-        spec_db = np.expand_dims(spec_db, axis=0)
+        # Kept at natural time length; downstream training pads/resizes per data source
+        spec_db = audio_to_mel_spectrogram(audio, sr=sr, resize_to=None)
         
         # Save
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

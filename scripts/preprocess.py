@@ -7,7 +7,106 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from typing import Tuple
 from torch.utils.data import default_collate
-from utils import normalize_spectrogram
+from utils import normalize_spectrogram, normalize_audio, apply_highpass_filter
+
+
+# ===== Shared audio preprocessing pipeline =====
+# Single source of truth for audio-level preprocessing: precompute_spectrograms.py,
+# encode_latents.py, and evaluate_model.py all call these two functions so training
+# and evaluation stay aligned.
+
+def load_and_preprocess_audio(
+    file_path,
+    sr=16000,
+    segment_duration=5.0,
+    target_loudness=-20.0,
+    hp_freq=20,
+    trim_top_db=40,
+    crop="random",
+    transform_fn=None
+):
+    """
+    Load and preprocess a single audio file: load -> resample -> loudness-normalize ->
+    trim silence -> crop/pad to a fixed segment -> optional transform -> high-pass filter.
+
+    Args:
+        file_path: Path to audio file
+        sr: Target sample rate
+        segment_duration: Fixed segment length in seconds
+        target_loudness: Target loudness in dB for normalize_audio
+        hp_freq: High-pass filter cutoff frequency in Hz
+        trim_top_db: Threshold (dB) below reference to consider as silence for trimming
+        crop: 'random' for a random segment (training) or 'center' for a deterministic
+            center crop (evaluation)
+        transform_fn: Optional (audio, sr) -> audio hook applied after crop/pad and
+            before the high-pass filter (e.g. pitch shift, time stretch)
+
+    Returns:
+        Preprocessed waveform (np.ndarray), or None if the file failed to load.
+    """
+    import librosa
+    import warnings
+
+    if crop not in ("random", "center"):
+        raise ValueError(f"Unknown crop mode: {crop!r}. Use 'random' or 'center'.")
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            y, loaded_sr = librosa.load(file_path, sr=None, mono=True)
+
+        if loaded_sr != sr:
+            y = librosa.resample(y, orig_sr=loaded_sr, target_sr=sr)
+
+        y = normalize_audio(y, method='db', target=target_loudness)
+        y, _ = librosa.effects.trim(y, top_db=trim_top_db)
+
+        segment_samples = int(segment_duration * sr)
+        if len(y) >= segment_samples:
+            max_start = len(y) - segment_samples
+            start_idx = np.random.randint(0, max_start + 1) if crop == "random" else max_start // 2
+            y = y[start_idx:start_idx + segment_samples]
+        else:
+            y = np.pad(y, (0, segment_samples - len(y)), mode='constant')
+
+        if transform_fn is not None:
+            y = transform_fn(y, sr)
+
+        y = apply_highpass_filter(y, sr, cutoff_freq=hp_freq)
+
+        return y
+    except Exception as e:
+        print(f"Error loading {file_path}: {e}")
+        return None
+
+
+def audio_to_mel_spectrogram(audio, sr=16000, n_mels=128, resize_to=(128, 128)):
+    """
+    Convert a waveform to a normalized mel-spectrogram: melspec -> power_to_db ->
+    mean/std normalize -> optional resize -> add channel dimension.
+
+    Args:
+        audio: Waveform array
+        sr: Sample rate
+        n_mels: Number of mel bins
+        resize_to: (freq, time) shape to resize to via zoom, or None to keep the
+            natural time dimension (used by the cached-spectrogram training path)
+
+    Returns:
+        Spectrogram of shape (1, n_mels, time) as float32.
+    """
+    import librosa
+    from scipy.ndimage import zoom
+
+    spec = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=n_mels)
+    spec_db = librosa.power_to_db(spec, ref=np.max)
+    spec_db = normalize_spectrogram(spec_db)
+
+    if resize_to is not None:
+        zoom_factors = (resize_to[0] / spec_db.shape[0], resize_to[1] / spec_db.shape[1])
+        spec_db = zoom(spec_db, zoom_factors, order=1)
+
+    return np.expand_dims(spec_db.astype(np.float32), axis=0)
 
 
 def collate_fn_skip_none(batch):
@@ -330,13 +429,6 @@ def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True, sam
     Returns:
         Tuple of (X, y) where X is (N, 1, 128, time) and y is (N,)
     """
-    import librosa
-    import warnings
-    from scipy.ndimage import zoom
-    
-    # Suppress librosa warnings during loading
-    warnings.filterwarnings('ignore', category=UserWarning)
-    
     df = pd.read_csv(manifest_path)
     
     if num_samples is not None:
@@ -373,19 +465,14 @@ def load_all_from_manifest(manifest_path, num_samples=None, use_cached=True, sam
                     skipped_count += 1
                     continue
                 
-                # Load audio and create spectrogram (suppress librosa codec warnings)
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore')
-                    audio, sr = librosa.load(filepath, sr=sample_rate, mono=True)
+                # Same pipeline used to build training data; center crop for determinism
+                audio = load_and_preprocess_audio(filepath, sr=sample_rate, crop="center")
+                if audio is None:
+                    skipped_count += 1
+                    continue
                 
-                spec = librosa.feature.melspectrogram(y=audio, sr=sample_rate, n_mels=128)
-                spec_db = librosa.power_to_db(spec, ref=np.max)
-                
-                # Normalize
-                spec_db = normalize_spectrogram(spec_db)
-                
-                # Add channel dimension: (128, T) → (1, 128, T)
-                spec_db = spec_db[np.newaxis, :, :]
+                # Kept at natural time length; padded to a common length below
+                spec_db = audio_to_mel_spectrogram(audio, sr=sample_rate, resize_to=None)
                 
                 label = int(row['label'])
                 X_list.append(spec_db)
@@ -433,12 +520,20 @@ def load_all_from_manifest_with_transforms(manifest_path, target_shape=(128, 128
         Tuple of (X, y) where X is (N, 1, freq, time) and y is (N,)
     """
     import librosa
-    import warnings
-    from scipy.ndimage import zoom
-    
-    # Suppress librosa warnings during loading
-    warnings.filterwarnings('ignore', category=UserWarning)
-    
+
+    def apply_transform(audio, sr):
+        if transform == "pitch_shift":
+            return librosa.effects.pitch_shift(audio, sr=sr, n_steps=np.random.randint(-2, 3))
+        elif transform == "time_stretch":
+            return librosa.effects.time_stretch(audio, rate=np.random.uniform(0.9, 1.1))
+        elif transform == "random":
+            tf = np.random.choice(['pitch', 'stretch', 'none'])
+            if tf == 'pitch':
+                return librosa.effects.pitch_shift(audio, sr=sr, n_steps=np.random.randint(-1, 2))
+            elif tf == 'stretch':
+                return librosa.effects.time_stretch(audio, rate=np.random.uniform(0.95, 1.05))
+        return audio
+
     df = pd.read_csv(manifest_path)
     
     X_list = []
@@ -454,37 +549,13 @@ def load_all_from_manifest_with_transforms(manifest_path, target_shape=(128, 128
                 skipped_count += 1
                 continue
             
-            # Load audio (suppress librosa codec warnings)
-            with warnings.catch_warnings():
-                warnings.simplefilter('ignore')
-                audio, sr = librosa.load(filepath, sr=16000, mono=True)
+            # Same pipeline used to build training data; center crop for determinism
+            audio = load_and_preprocess_audio(filepath, sr=16000, crop="center", transform_fn=apply_transform)
+            if audio is None:
+                skipped_count += 1
+                continue
             
-            # Apply transforms
-            if transform == "pitch_shift":
-                audio = librosa.effects.pitch_shift(audio, sr=sr, n_steps=np.random.randint(-2, 3))
-            elif transform == "time_stretch":
-                audio = librosa.effects.time_stretch(audio, rate=np.random.uniform(0.9, 1.1))
-            elif transform == "random":
-                # Random choice of transforms
-                tf = np.random.choice(['pitch', 'stretch', 'none'])
-                if tf == 'pitch':
-                    audio = librosa.effects.pitch_shift(audio, sr=sr, n_steps=np.random.randint(-1, 2))
-                elif tf == 'stretch':
-                    audio = librosa.effects.time_stretch(audio, rate=np.random.uniform(0.95, 1.05))
-            
-            # Create spectrogram
-            spec = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=n_mels)
-            spec_db = librosa.power_to_db(spec, ref=np.max)
-            
-            # Normalize
-            spec_db = normalize_spectrogram(spec_db)
-            
-            # Resize to target shape using zoom
-            zoom_factors = (target_shape[0] / spec_db.shape[0], target_shape[1] / spec_db.shape[1])
-            spec_resized = zoom(spec_db, zoom_factors, order=1).astype(np.float32)
-            
-            # Add channel dimension
-            spec_tensor = spec_resized[np.newaxis, :, :]
+            spec_tensor = audio_to_mel_spectrogram(audio, sr=16000, n_mels=n_mels, resize_to=target_shape)
             
             label = int(row['label'])
             X_list.append(spec_tensor)

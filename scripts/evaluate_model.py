@@ -5,7 +5,7 @@ import argparse
 import csv
 from pathlib import Path
 from tqdm import tqdm
-from preprocess import load_all_from_manifest, load_all_from_manifest_with_transforms
+from preprocess import load_all_from_manifest, load_all_from_manifest_with_transforms, load_and_preprocess_audio, audio_to_mel_spectrogram
 from utils import ROOT_DIR, DATA_DIR
 from train_cnn import SimpleCNN
 from train_cnn_2d import CNN2D, CNN2D_Legacy
@@ -167,27 +167,13 @@ def evaluate(model_path, manifest_path, n_samples=1000, sample_rate=16000):
             continue
         
         try:
-            import librosa
-            import warnings
+            # Same pipeline used to build training data; center crop for determinism
+            audio = load_and_preprocess_audio(filepath, sr=sample_rate, crop="center")
+            if audio is None:
+                skipped_count += 1
+                continue
             
-            # Load and process audio (suppress codec warnings)
-            with warnings.catch_warnings():
-                warnings.simplefilter('ignore')
-                audio, sr = librosa.load(filepath, sr=sample_rate, mono=True)
-            
-            # Compute mel-spectrogram
-            spec = librosa.feature.melspectrogram(y=audio, sr=sample_rate, n_mels=128)
-            spec_db = librosa.power_to_db(spec, ref=np.max)
-            
-            # Apply normalization
-            from utils import normalize_spectrogram
-            spec_db = normalize_spectrogram(spec_db)
-            
-            # Resize to (128, 128)
-            zoom_factors = (128 / spec_db.shape[0], 128 / spec_db.shape[1])
-            spec_resized = zoom(spec_db, zoom_factors, order=1).astype(np.float32)
-            
-            X_list.append(spec_resized)
+            X_list.append(audio_to_mel_spectrogram(audio, sr=sample_rate, resize_to=(128, 128)))
             y_list.append(label)
             
         except Exception:
@@ -198,9 +184,8 @@ def evaluate(model_path, manifest_path, n_samples=1000, sample_rate=16000):
         print("❌ No valid samples processed.")
         return
     
-    # Stack data and add channel dimension: (N, 128, 128) -> (N, 1, 128, 128)
+    # Stack data: audio_to_mel_spectrogram already added the channel dim -> (N, 1, 128, 128)
     X = np.array(X_list, dtype=np.float32)
-    X = np.expand_dims(X, axis=1)
     y = np.array(y_list, dtype=np.int64)
     
     # Convert to torch tensor and run predictions
@@ -284,7 +269,7 @@ def evaluate_with_codec(model_path, manifest_path, codec_name, n_mels=128, targe
         filepath = sample_info.get('filepath')
         label = int(sample_info.get('label', 0))
 
-        audio = preprocess_audio(filepath, sr=sample_rate)
+        audio = preprocess_audio(filepath, sr=sample_rate, crop="center")
         if audio is None:
             continue
 
@@ -409,24 +394,13 @@ def extract_intermediate_activations(model_path, manifest_path, layer_name=None,
             continue
         
         try:
-            import librosa
-            import warnings
+            # Same pipeline used to build training data; center crop for determinism
+            audio = load_and_preprocess_audio(filepath, sr=sample_rate, crop="center")
+            if audio is None:
+                skipped_count += 1
+                continue
             
-            # Load and process single audio file (suppress codec warnings)
-            with warnings.catch_warnings():
-                warnings.simplefilter('ignore')
-                audio, sr = librosa.load(filepath, sr=sample_rate, mono=True)
-            
-            spec = librosa.feature.melspectrogram(y=audio, sr=sample_rate, n_mels=128)
-            spec_db = librosa.power_to_db(spec, ref=np.max)
-            
-            # Apply normalization BEFORE resizing (matches evaluation pipeline)
-            from utils import normalize_spectrogram
-            spec_db = normalize_spectrogram(spec_db)
-            
-            # Resize to (128, 128)
-            zoom_factors = (128 / spec_db.shape[0], 128 / spec_db.shape[1])
-            spec_resized = zoom(spec_db, zoom_factors, order=1).astype(np.float32)
+            spec_resized = audio_to_mel_spectrogram(audio, sr=sample_rate, resize_to=(128, 128))[0]
             
             # Add batch and channel dims: (1, 1, 128, 128)
             spec_tensor = torch.from_numpy(spec_resized[np.newaxis, np.newaxis, :, :]).float().to(device)
@@ -588,22 +562,13 @@ def extract_all_layer_activations(model_path, manifest_path, save_path=None, sam
             continue
         
         try:
-            import librosa
-            import warnings
+            # Same pipeline used to build training data; center crop for determinism
+            audio = load_and_preprocess_audio(filepath, sr=sample_rate, crop="center")
+            if audio is None:
+                skipped_count += 1
+                continue
             
-            # Load and process audio
-            with warnings.catch_warnings():
-                warnings.simplefilter('ignore')
-                audio, sr = librosa.load(filepath, sr=sample_rate, mono=True)
-            
-            spec = librosa.feature.melspectrogram(y=audio, sr=sample_rate, n_mels=128)
-            spec_db = librosa.power_to_db(spec, ref=np.max)
-            
-            from utils import normalize_spectrogram
-            spec_db = normalize_spectrogram(spec_db)
-            
-            zoom_factors = (128 / spec_db.shape[0], 128 / spec_db.shape[1])
-            spec_resized = zoom(spec_db, zoom_factors, order=1).astype(np.float32)
+            spec_resized = audio_to_mel_spectrogram(audio, sr=sample_rate, resize_to=(128, 128))[0]
             
             spec_tensor = torch.from_numpy(spec_resized[np.newaxis, np.newaxis, :, :]).float().to(device)
             

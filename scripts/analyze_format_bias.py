@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import json
 
-from preprocess import load_all_from_manifest
+from preprocess import load_all_from_manifest, load_and_preprocess_audio, audio_to_mel_spectrogram
 from utils import ROOT_DIR, DATA_DIR
 from evaluate_model import load_model_auto, preprocess_data
 from train_cnn import SimpleCNN
@@ -124,28 +124,15 @@ def analyze_format_bias(model_path, testset_manifest, output_path=None, sample_r
             continue
         
         try:
-            import librosa
-            import warnings
-            from scipy.ndimage import zoom
-            from utils import normalize_spectrogram
+            # Same pipeline used to build training data; center crop for determinism
+            audio = load_and_preprocess_audio(filepath, sr=sample_rate, crop="center")
+            if audio is None:
+                skipped_count += 1
+                continue
             
-            # Load and process audio (suppress codec warnings)
-            with warnings.catch_warnings():
-                warnings.simplefilter('ignore')
-                audio, sr = librosa.load(filepath, sr=sample_rate, mono=True)
+            spec_resized = audio_to_mel_spectrogram(audio, sr=sample_rate, resize_to=(128, 128))
             
-            # Compute mel-spectrogram
-            spec = librosa.feature.melspectrogram(y=audio, sr=sample_rate, n_mels=128)
-            spec_db = librosa.power_to_db(spec, ref=np.max)
-            
-            # Apply normalization
-            spec_db = normalize_spectrogram(spec_db)
-            
-            # Resize to (128, 128)
-            zoom_factors = (128 / spec_db.shape[0], 128 / spec_db.shape[1])
-            spec_resized = zoom(spec_db, zoom_factors, order=1).astype(np.float32)
-            
-            X_list.append(spec_resized)
+            X_list.append(spec_resized[0])
             y_list.append(label)
             filepath_list.append(filepath)
             format_list.append(file_format)

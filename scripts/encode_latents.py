@@ -4,8 +4,6 @@ Splits dataset randomly and equally among multiple codecs.
 Processes each codec in parallel with a dedicated worker process.
 """
 
-import torch
-import librosa
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
@@ -13,7 +11,7 @@ import pandas as pd
 from multiprocessing import Pool, Manager
 import os
 from functools import partial
-from utils import normalize_audio, apply_highpass_filter
+from preprocess import load_and_preprocess_audio
 from neural_codec_confounders import MetaEnCodecWrapper, DACWrapper, GriffinMelCodec
 
 CODECS = {
@@ -31,48 +29,15 @@ def preprocess_audio(
     sr=16000,
     segment_duration=5.0,
     target_loudness=-20.0,
-    hp_freq=20
+    hp_freq=20,
+    crop="random"
 ):
-    """
-    Follow preprocessing pipeline from preprocess.py:
-    1. Load audio
-    2. Resample to target sr
-    3. Loudness normalize
-    4. Trim silence
-    5. Random crop to fixed-length segment
-    6. High-pass filter
-    """
-    try:
-        # 1. Load audio
-        y, loaded_sr = librosa.load(file_path, sr=None, mono=True)
-        
-        # 2. Resample
-        if loaded_sr != sr:
-            y = librosa.resample(y, orig_sr=loaded_sr, target_sr=sr)
-        
-        # 3. Loudness normalize
-        y = normalize_audio(y, method='db', target=target_loudness)
-        
-        # 4. Trim silence
-        y, _ = librosa.effects.trim(y, top_db=40)
-        
-        # 5. Random crop to fixed-length segment
-        segment_samples = int(segment_duration * sr)
-        if len(y) >= segment_samples:
-            max_start = len(y) - segment_samples
-            start_idx = np.random.randint(0, max_start + 1)
-            y = y[start_idx:start_idx + segment_samples]
-        else:
-            pad_width = segment_samples - len(y)
-            y = np.pad(y, (0, pad_width), mode='constant')
-        
-        # 6. High-pass filter
-        y = apply_highpass_filter(y, sr, cutoff_freq=hp_freq)
-        
-        return y
-    except Exception as e:
-        print(f"Error loading {file_path}: {e}")
-        return None
+    """Thin wrapper around preprocess.py's shared pipeline. crop='random' for training
+    augmentation (default), 'center' for deterministic evaluation."""
+    return load_and_preprocess_audio(
+        file_path, sr=sr, segment_duration=segment_duration,
+        target_loudness=target_loudness, hp_freq=hp_freq, crop=crop
+    )
 
 def encode_decode_save(audio_file, output_path, codec):
     """Encode and decode audio through codec, save decoded audio."""
