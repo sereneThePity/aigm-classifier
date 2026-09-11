@@ -137,7 +137,7 @@ def load_model_auto(model_path):
     return model
 
 def _predict_and_score(model, X, y, device):
-    """Run the model over X and return (accuracy, raw predictions)."""
+    """Run the model over X and return (accuracy, raw predictions, per-class accuracies)."""
     X_tensor = torch.from_numpy(X).float().to(device)
 
     with torch.no_grad():
@@ -150,7 +150,14 @@ def _predict_and_score(model, X, y, device):
         preds_bin = (preds.flatten() > 0.5).astype(int)
 
     acc = np.mean(preds_bin == y)
-    return acc, preds
+    
+    # Calculate per-class accuracy
+    class_accs = {}
+    for c in np.unique(y):
+        mask = y == c
+        class_accs[c] = np.mean(preds_bin[mask] == y[mask]) if mask.sum() > 0 else 0.0
+    
+    return acc, preds, class_accs
 
 def evaluate(model_path, manifest_path, n_samples=None, sample_rate=16000,
              transform=None, codec_name=None, n_mels=128, target_shape=(128, 128)):
@@ -234,8 +241,10 @@ def evaluate(model_path, manifest_path, n_samples=None, sample_rate=16000,
     y = np.array(y_list, dtype=np.int64)
     X = preprocess_data(X, model)
 
-    acc, preds = _predict_and_score(model, X, y, device)
+    acc, preds, class_accs = _predict_and_score(model, X, y, device)
     print(f"\n✅ Accuracy: {acc*100:.2f}% ({len(X)} samples, skipped {skipped_count}/{len(manifest_data)})")
+    for cls, cls_acc in sorted(class_accs.items()):
+        print(f"   Class {cls}: {cls_acc*100:.2f}%")
     print(f"   Mean confidence: {np.mean(preds):.3f}")
     print(f"   Std confidence: {np.std(preds):.3f}")
     return acc
